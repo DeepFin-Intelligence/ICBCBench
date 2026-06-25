@@ -17,7 +17,7 @@ import argparse
 from tqdm import tqdm
 
 from evaluation_toolkit import safe_json_loads
-from evaluation_toolkit.utils import get_eval_data_dir, get_project_root
+from evaluation_toolkit.utils import get_project_root
 
 client = OPENROUTER
 
@@ -273,14 +273,14 @@ def process_single_report(task_id, report_content, args, question_dict):
         return None, f"Exception occurred during evaluation of Task {task_id}: {str(e)}"
 
 def main(args):
-    # Load data from topics.json
+    # Load question data
     with open(args.question_path, 'r', encoding='utf-8') as f:
         question_data = json.load(f)
 
     question_dict = {item["id"]: item for item in question_data}
 
     # Load reports to be scored
-    report_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(args.question_path)), f"dr_reports/reports_{args.report_model}.json"))
+    report_path = os.path.normpath(os.path.join(args.report_dir, f"reports_{args.report_model}.json"))
 
     # Read generated report content
     with open(report_path, "r", encoding="utf-8") as f:
@@ -389,10 +389,11 @@ if __name__ == "__main__":
     parser.add_argument("--judge", type=str, required=True, help="Scoring model")
     parser.add_argument("--report_model", type=str, required=True, help="Model to be evaluated")
     project_root = get_project_root()
-    eval_dir = get_eval_data_dir()
-    default_question_path = os.path.join(project_root, "report_collect_and_eval", "subjective_report_questions.jsonl")
-    default_output_dir = os.path.join(eval_dir, "subjective_eval", "test_ICBC_DR_Tasks", "scores")
+    default_question_path = os.path.normpath(os.path.join(project_root, "data", "subjective_questions_public_40.json"))
+    default_report_dir = os.path.normpath(os.path.join(project_root, "eval_result", "subjective_eval", "dr_reports"))
+    default_output_dir = os.path.normpath(os.path.join(project_root, "eval_result", "subjective_eval", "scores"))
     parser.add_argument("--question_path", type=str, default=default_question_path, help="Path to the question and scoring criteria JSON file")
+    parser.add_argument("--report_dir", type=str, default=default_report_dir, help="Directory containing generated reports")
     parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Path to save scoring results")
     parser.add_argument("--max_samples", type=int, default=None, help="Maximum number of samples to evaluate, None means evaluate all unscored tasks")
     parser.add_argument("--max_workers", type=int, default=10, help="Number of concurrent workers")
