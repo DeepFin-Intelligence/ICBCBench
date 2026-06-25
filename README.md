@@ -24,8 +24,7 @@ evaluation_toolkit/
 │   │   ├── time_decay.py
 │   │   └── utils.py
 │   └── scoring/                        # 分数汇总与统计
-│       ├── compute_final_score.py      # 整合 ExpertCriteria + FACT 计算最终总分
-│       └── fact_stat.py                # FACT 指标统计
+│       └── compute_final_score.py      # 整合 ExpertCriteria + FACT 计算最终总分
 ├── DR_clients/                     # Deep Research 模型客户端
 ├── model_clients.py                # API 客户端集合
 └── utils.py                        # JSON / PDF 等工具函数
