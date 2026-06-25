@@ -1,20 +1,21 @@
 # ICBCBench Evaluation Toolkit
 
-## 目录结构
+This repository contains the evaluation toolkit for the ICBCBench project, including objective question evaluation and subjective research report evaluation.
+
+## Directory Structure
 
 ```
 evaluation_toolkit/
-├── objective_eval/                 # 客观题评估
-│   ├── predict.py                      # 异步调用模型答题
-│   ├── judge.py                        # 调用 Judge 模型批分
-│   ├── metrics.py                      # 指标计算（Accuracy / Calibration Error）
-│   └── subset_metrics.py               # v2 客观题子集统计
-├── subjective_eval/                # 主观题（研究报告）评估
-│   ├── write.py                        # 调用模型撰写报告
-│   ├── ExpertCriteria/                 # 专家评分标准评分
-│   │   ├── score_by_criteria.py
-│   │   └── stat.py                     # 将 jsonl 评分结果合并为 leaderboard CSV
-│   ├── FACT/                           # 引用提取、去重、爬取、验证、统计
+├── objective_eval/                 # Objective question evaluation
+│   ├── predict.py                      # Generate model predictions
+│   ├── judge.py                        # Judge model answers
+│   └── metrics.py                      # Compute Accuracy / Calibration Error
+├── subjective_eval/                # Subjective research report evaluation
+│   ├── write.py                        # Generate research reports with models
+│   ├── ExpertCriteria/                 # Expert-criteria based scoring
+│   │   ├── score_by_criteria.py        # Score reports by criteria
+│   │   └── stat.py                     # Aggregate jsonl scores to leaderboard CSV
+│   ├── FACT/                           # Citation extraction, deduplication, scraping, validation, and scoring
 │   │   ├── extract.py
 │   │   ├── deduplicate.py
 │   │   ├── scrape.py
@@ -23,63 +24,149 @@ evaluation_toolkit/
 │   │   ├── authority.py
 │   │   ├── time_decay.py
 │   │   └── utils.py
-│   └── scoring/                        # 分数汇总与统计
-│       └── compute_final_score.py      # 整合 ExpertCriteria + FACT 计算最终总分
-├── DR_clients/                     # Deep Research 模型客户端
-├── model_clients.py                # API 客户端集合
-└── utils.py                        # JSON / PDF 等工具函数
+│   └── scoring/                        # Final score aggregation
+│       └── compute_final_score.py      # Merge ExpertCriteria + FACT into final leaderboard
+├── DR_clients/                     # Deep Research model clients
+├── model_clients.py                # API client collection
+└── utils.py                        # JSON / PDF utilities
 ```
 
-## 安装依赖
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-> 注意：原项目根目录的 `requirements.txt` 也包含相关依赖，二者可任选其一安装。
+> Note: `subjective_eval/FACT/scrape.py` depends on `curl_cffi`.
 
-## 运行方式
+## Environment Variables
 
-所有脚本均可直接运行，也可以通过模块方式运行。
+API keys are loaded from a `.env` file in the project root. Copy `.env.example` to `.env` and fill in the required keys:
 
-### 直接运行（推荐）
+```bash
+cp .env.example .env
+```
+
+Current clients use `OPENROUTER_API_KEY` as the default. Refer to `model_clients.py` and `.env.example` for all supported keys.
+
+## Data Paths
+
+Default data files are expected under the project root:
+
+- Objective questions: `data/objective_questions_public_80.json`
+- Subjective questions: `data/subjective_questions_public_40.json`
+- Model reports: `eval_result/subjective_eval/dr_reports/reports_<model>.json`
+
+Generated evaluation results are written to `eval_result/`:
+
+- Objective predictions: `eval_result/objective_eval/prediction_results/<model>.json`
+- Objective judged results: `eval_result/objective_eval/judged_results/judge_<judge>/judged_<model>.json`
+- Objective metrics: `eval_result/objective_eval/evaluation_results.csv`
+- Subjective scores: `eval_result/subjective_eval/scores/judge_<judge>/scores_<model>.jsonl`
+- Subjective leaderboard: `eval_result/subjective_eval/scores/judge_<judge>/leaderboard.csv`
+- FACT results: `eval_result/subjective_eval/fact_result.csv`
+- Final leaderboard: `eval_result/subjective_eval/final_leaderboard.csv`
+
+## Objective Evaluation Pipeline
+
+### 1. Generate Predictions
 
 ```bash
 python evaluation_toolkit/objective_eval/predict.py \
-    --local_dataset "..." --model gpt-4o --num_workers 2
+    --local_dataset data/objective_questions_public_80.json \
+    --model gpt-4o \
+    --num_workers 2
 ```
 
-### 模块方式运行
+Outputs: `eval_result/objective_eval/prediction_results/gpt-4o.json`
+
+### 2. Judge Predictions
 
 ```bash
-python -m evaluation_toolkit.objective_eval.predict \
-    --local_dataset "..." --model gpt-4o --num_workers 2
+python evaluation_toolkit/objective_eval/judge.py \
+    --local_dataset data/objective_questions_public_80.json \
+    --predictions eval_result/objective_eval/prediction_results/gpt-4o.json \
+    --judge gemini-1.5-pro \
+    --num_workers 5
 ```
 
-## 数据路径说明
+Outputs:
+- `eval_result/objective_eval/judged_results/judge_<judge>/judged_gpt-4o.json`
+- `eval_result/objective_eval/evaluation_results.csv`
 
-脚本中的数据路径默认基于项目根目录下的 `data/` 目录。可通过环境变量统一修改数据根目录：
+### 3. Compute Metrics
 
 ```bash
-export EVAL_DATA_DIR="/path/to/your/eval_data"
+python evaluation_toolkit/objective_eval/metrics.py
 ```
 
-- 客观题数据：`$EVAL_DATA_DIR/objective_questions_public_80.json`
-- 主观题数据：`$EVAL_DATA_DIR/subjective_questions_public_40.json`
+Reads judged results from `eval_result/objective_eval/judged_results/judge_<judge>/` and writes metrics to `eval_result/objective_eval/`.
 
-## 环境变量
+## Subjective Evaluation Pipeline
 
-API Key 通过 `.env` 文件读取，请在项目根目录创建 `.env` 并配置：
+### 1. Generate Reports
 
 ```bash
-OPENAI_API_KEY=...
-DEEPSEEK_API_KEY=...
-KIMI_API_KEY=...
-# 其他需要的 key
+python evaluation_toolkit/subjective_eval/write.py \
+    --local_dataset data/subjective_questions_public_40.json \
+    --model gpt-4o \
+    --num_workers 2
 ```
 
-具体 key 名请参考 `model_clients.py`。
+Outputs: `eval_result/subjective_eval/dr_reports/reports_gpt-4o.json`
 
-## 注意事项
+### 2. ExpertCriteria Scoring
 
-- `subjective_eval/FACT/scrape.py` 依赖 `curl_cffi`。
+```bash
+python evaluation_toolkit/subjective_eval/ExpertCriteria/score_by_criteria.py \
+    --judge gemini-1.5-pro \
+    --report_model gpt-4o
+```
+
+Outputs: `eval_result/subjective_eval/scores/judge_<judge>/scores_gpt-4o.jsonl`
+
+### 3. Aggregate ExpertCriteria Scores
+
+```bash
+python evaluation_toolkit/subjective_eval/ExpertCriteria/stat.py \
+    --input_dir eval_result/subjective_eval/scores/judge_<judge> \
+    --query_file data/subjective_questions_public_40.json \
+    --output_csv eval_result/subjective_eval/scores/judge_<judge>/leaderboard.csv
+```
+
+### 4. FACT Evaluation
+
+Run the FACT pipeline (`extract.py`, `deduplicate.py`, `scrape.py`, `validate.py`) to produce a validated citation file, then compute FACT metrics:
+
+```bash
+python evaluation_toolkit/subjective_eval/FACT/stat.py \
+    --model_name gpt-4o \
+    --input_path <path_to_validated_data.jsonl> \
+    --output_csv eval_result/subjective_eval/fact_result.csv \
+    --query_file data/subjective_questions_public_40.json
+```
+
+### 5. Compute Final Score
+
+```bash
+python evaluation_toolkit/subjective_eval/scoring/compute_final_score.py \
+    --expert_dirs eval_result/subjective_eval/scores/judge_<judge> \
+    --fact_csv eval_result/subjective_eval/fact_result.csv \
+    --output_dir eval_result/subjective_eval \
+    --alpha 0.8 --beta 0.1 --gamma 0.1
+```
+
+Outputs: `eval_result/subjective_eval/final_leaderboard.csv`
+
+The final score formula is:
+
+```
+S_final = alpha * S_expert + beta * S_citation + gamma * S_source
+```
+
+## Notes
+
+- All scripts can be run directly or as modules (`python -m evaluation_toolkit.objective_eval.predict ...`).
+- Use `--max_samples` to limit the number of samples during testing.
+- Set `--num_workers` / `--max_workers` according to your API rate limit.
+- The FACT pipeline expects `citations_deduped` in the input data with fields such as `facts`, `validate_res`, `publish_time`, and `true_url`.
