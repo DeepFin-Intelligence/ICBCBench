@@ -16,7 +16,7 @@ import tempfile
 from tqdm import tqdm
 from evaluation_toolkit.subjective_eval.FACT.time_decay import *
 from evaluation_toolkit.subjective_eval.FACT import authority
-from evaluation_toolkit.utils import get_eval_data_dir
+from evaluation_toolkit.utils import get_project_root
 
 def fact_evaluate(data, args, id_to_lang):
     # ======= Citation Link Validity (Strictly by definition: S_citation = (1/T) * sum(N_s,t / |U_t|) ========
@@ -347,8 +347,8 @@ def run_stat(args, id_to_lang, output_csv, language_filter):
 
 if __name__ == "__main__":
 
-    eval_dir = get_eval_data_dir()
-    default_query_file = os.path.join(eval_dir, "subjective_eval", "final_test", "subjective_60.jsonl")
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    default_query_file = os.path.normpath(os.path.join(project_root, "data", "subjective_questions_public_40.json"))
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, required=True, help="name of the model to record")
