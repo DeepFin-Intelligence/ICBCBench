@@ -21,54 +21,6 @@ from evaluation_toolkit.utils import get_eval_data_dir, get_project_root
 
 client = OPENROUTER
 
-def format_prompts(criteria_json):
-    prompts = {}
-
-    # Iterate over each top-level dimension
-    for dim in criteria_json['dimensions']:
-        dim_id = dim['id']
-        dim_name = dim['name']
-
-        for sub in dim['sub_criteria']:
-            # 1. Build the criteria text for this dimension
-            criteria_text = ""
-
-            # Format sub-dimension title
-            criteria_text += f"### 子维度 {sub['id']}: {sub['name']} (满分 {sub['max_points']} 分)\n"
-            criteria_text += "评分阶梯 (Rubrics):\n"
-
-            # Format detailed scoring rubrics
-            for rubric in sub['rubrics']:
-                score_str = f"{rubric['score_range'][0]}-{rubric['score_range'][1]}分"
-                criteria_text += f"- [{score_str}]: {rubric['description']}\n"
-
-            sub_id = sub['id'].replace('.', '_')
-            sub_name = sub['name']
-
-            # 2. Fill the built criteria into the prompt template
-            prompt_template = f"""你是一位资深的研究报告评审专家。
-请阅读用户上传的研究报告，仅针对以下特定维度进行评分。
-
----
-## 当前评估维度：{dim_name} - {sub_name} (满分 {sub['max_points']} 分)
-
-请严格依据以下评分标准进行打分：
-{criteria_text}
----
-
-## 输出要求
-请直接输出 JSON 格式的结果，不要包含任何 Markdown 格式符号（如 ```json）。
-输出结构如下：
-{{
-    "score": "int (0-{sub['max_points']})",
-    "reasoning": "string (引用原文并解释评分依据)"
-}}"""
-
-            prompts[sub_id] = prompt_template
-
-    return prompts
-
-
 def format_whole_prompt(criteria_text, report_text, q_language):
     prompt_template_zh = f"""你是一位极其严苛的金融研究报告资深评审专家。你的任务是仔细阅读【研究报告】，对照【评分标准】进行极其严格的量化评估。
 
