@@ -7,10 +7,10 @@ import os
 
 class AuthorityDatabaseBuilder:
     def __init__(self):
-        self.domain_map = {} # 格式: {'domain': weight}
+        self.domain_map = {}  # Format: {'domain': weight}
 
     def add_gov_domains(self):
-        """1. 获取美国官方 .gov 列表"""
+        """1. Fetch official US .gov domain list"""
         url = "https://raw.githubusercontent.com/cisagov/dotgov-data/main/current-full.csv"
         try:
             df = pd.read_csv(url)
@@ -21,7 +21,7 @@ class AuthorityDatabaseBuilder:
             print(f"[Error] Failed to fetch .gov data: {e}")
 
     def add_university_domains(self):
-        """2. 获取全球大学列表"""
+        """2. Fetch global university domain list"""
         url = "https://raw.githubusercontent.com/Hipo/university-domains-list/master/world_universities_and_domains.json"
         try:
             resp = requests.get(url)
@@ -36,7 +36,7 @@ class AuthorityDatabaseBuilder:
             print(f"[Error] Failed to fetch university data: {e}")
 
     def add_manual_whitelist(self):
-        """3. 添加手动维护的顶级白名单"""
+        """3. Add manually maintained top-tier whitelist"""
         whitelist = {
             'nature.com': 1.0, 'science.org': 1.0, 'reuters.com': 1.0,
             'bloomberg.com': 1.0, 'apnews.com': 1.0, 'who.int': 1.0,
@@ -50,7 +50,7 @@ class AuthorityDatabaseBuilder:
         df.to_csv(filename, index=False)
         print(f"Database saved to {filename} with {len(df)} records.")
 
-# # 使用
+# # Usage
 # builder = AuthorityDatabaseBuilder()
 # builder.add_gov_domains()
 # builder.add_university_domains()
@@ -58,7 +58,7 @@ class AuthorityDatabaseBuilder:
 # builder.export_csv()
 
 
-# 推荐：从外部加载配置文件，使得代码和配置解耦
+# Recommended: Load config from external file to decouple code and configuration
 def load_authority_config(config_path=None):
     if config_path is None:
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "authority_config.json")
@@ -81,7 +81,7 @@ AUTHORITY_CONFIG = load_authority_config()
 
 def get_authority_weight(url):
     """
-    解析 URL 并返回特定领域的权威度权重。
+    Parse URL and return authority weight for the specific domain.
     """
     COMPLEX_SUFFIXES = {'com', 'org', 'net', 'gov', 'edu', 'co', 'ac', 'mil'}
 
@@ -89,48 +89,48 @@ def get_authority_weight(url):
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
 
-        # 1. 清洗域名 (去除 www. 或其他常见二级前缀以便于主域名匹配)
-        # 考虑到金融领域可能存在诸如 finance.yahoo.com，需要提取主域名进行匹配
+        # 1. Clean domain (remove www. or other common secondary prefixes for main domain matching)
+        # For financial domains like finance.yahoo.com, extract the root domain for matching
         parts = domain.split('.')
-        # 场景1：带有双层后缀的域名（如 pbc.gov.cn, finance.sina.com.cn, a.b.hkex.com.hk）
-        # 至少需要3段，且倒数第二段属于双层后缀列表
+        # Scenario 1: Domains with double suffixes (e.g., pbc.gov.cn, finance.sina.com.cn, a.b.hkex.com.hk)
+        # At least 3 parts, and the second-to-last part is in the double-suffix list
         if len(parts) >= 3 and parts[-2] in COMPLEX_SUFFIXES:
             root_domain = f"{parts[-3]}.{parts[-2]}.{parts[-1]}"
 
-        # 场景2：普通的单层后缀域名（如 szse.cn, bloomberg.com, finance.yahoo.com）
-        # 至少需要2段，且倒数第二段不是特殊的双层后缀
+        # Scenario 2: Normal single-suffix domains (e.g., szse.cn, bloomberg.com, finance.yahoo.com)
+        # At least 2 parts, and the second-to-last part is not a special double suffix
         elif len(parts) >= 2 and parts[-2] not in COMPLEX_SUFFIXES:
             root_domain = f"{parts[-2]}.{parts[-1]}"
 
-        # 场景3：极端兜底（如 localhost，或者输入的就是 com.cn 本身）
+        # Scenario 3: Fallback edge cases (e.g., localhost, or input like com.cn itself)
         else:
             root_domain = domain[4:] if domain.startswith("www.") else domain
 
         domain_to_check = root_domain
         # print(f"[Info] Checking authority weight for {domain_to_check}...")
 
-        # 2. 判定 Tier 1 (后缀匹配 - 如 sec.gov, pbc.gov.cn)
-        # 注意: AUTHORITY_CONFIG["high_trust_suffixes"] 需要转换为 tuple 才能传入 endswith
+        # 2. Determine Tier 1 (suffix match - e.g., sec.gov, pbc.gov.cn)
+        # Note: AUTHORITY_CONFIG["high_trust_suffixes"] must be converted to tuple for endswith
         if domain.endswith(tuple(AUTHORITY_CONFIG.get("high_trust_suffixes", []))):
             return 1.0
 
-        # 3. 判定 Tier 1 (顶级权威域名精确匹配)
+        # 3. Determine Tier 1 (exact match with top authority domains)
         if domain_to_check in AUTHORITY_CONFIG.get("high_trust_domains", []):
             return 1.0
 
-        # 4. 判定 Tier 2 (高质量/机构研究)
+        # 4. Determine Tier 2 (high-quality/institutional research)
         if domain_to_check in AUTHORITY_CONFIG.get("medium_high_trust_domains", []):
-            return 0.85  # 或 0.9
+            return 0.85  # or 0.9
 
-        # 5. 判定 Tier 3 (大众媒体/UGC/公关稿)
+        # 5. Determine Tier 3 (mass media/UGC/PR articles)
         if domain_to_check in AUTHORITY_CONFIG.get("medium_trust_domains", []):
-            return 0.7  # 原来是 0.8，针对严谨的金融研究予以适当降权
+            return 0.7  # Previously 0.8, reduced for rigorous financial research
 
-        # 6. 默认 Tier 4
+        # 6. Default Tier 4
         return AUTHORITY_CONFIG.get("default_weight", 0.5)
 
     except Exception:
-        # 如果 URL 解析失败，按最低权重处理
+        # If URL parsing fails, use the minimum weight
         return 0.5
 
 if __name__ == "__main__":
@@ -142,4 +142,4 @@ if __name__ == "__main__":
 
     for url in test_url:
         weight = get_authority_weight(url)
-        print(f"[Info] {url} 的权威度权重为 {weight:.2f}")
+        print(f"[Info] Authority weight for {url} is {weight:.2f}")

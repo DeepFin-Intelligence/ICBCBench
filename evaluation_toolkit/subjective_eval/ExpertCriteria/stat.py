@@ -35,7 +35,7 @@ def merge_multiple_jsonl_to_csv(file_list, output_csv_path, language_filter, id_
                     if language_filter:
                         # Get the language for this ID, default to "en"
                         raw_lang = id_to_lang_map.get(str(entry['task_id']), "")
-                        query_language = "zh" if raw_lang in ["zh", "chinese", "涓枃"] else "en"
+                        query_language = "zh" if raw_lang in ["zh", "chinese", "中文"] else "en"
 
                         # Keep only matching language
                         if query_language != language_filter:
