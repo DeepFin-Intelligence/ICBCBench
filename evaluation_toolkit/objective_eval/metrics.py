@@ -14,7 +14,6 @@ import json
 import os
 import math
 
-from evaluation_toolkit.utils import get_eval_data_dir
 
 
 # source: https://github.com/hendrycks/outlier-exposure/blob/master/utils/calibration_tools.py
@@ -124,10 +123,10 @@ def get_multimodal_ids_from_json(json_path):
 
 def dump_all_metrics(judge_model, language_filter, multimodal_ids=None):
 
-    eval_dir = get_eval_data_dir()
-    judged_dir = os.path.join(eval_dir, "objective_eval", "final_test", "judged_results", f"judge_{judge_model}")
+    project_root = Path(__file__).resolve().parent.parent.parent
+    judged_dir = os.path.normpath(os.path.join(project_root, "eval_result", "objective_eval", "judged_results", f"judge_{judge_model}"))
 
-    query_file = os.path.join(eval_dir, "objective_eval", "final_test", "qa_140.json")
+    query_file = os.path.normpath(os.path.join(project_root, "data", "objective_questions_public_80.json"))
     with open(query_file, "r", encoding="utf-8") as f:
         query_data = json.load(f)
 
@@ -143,7 +142,8 @@ def dump_all_metrics(judge_model, language_filter, multimodal_ids=None):
         print(f"Loaded multimodal exclusion: {len(multimodal_set)} IDs (text-only = remaining after exclusion)")
 
     # Result file path
-    results_dir = os.path.join(eval_dir, "objective_eval", "final_test", "judged_results", f"judge_{judge_model}")
+    results_dir = os.path.normpath(os.path.join(project_root, "eval_result", "objective_eval"))
+    os.makedirs(results_dir, exist_ok=True)
     suffix_parts = []
     if language_filter:
         suffix_parts.append(language_filter)
@@ -189,8 +189,8 @@ if __name__ == "__main__":
     judge_model = "gpt-5.4"
     # judge_model = "gpt-5.2"
 
-    eval_dir = get_eval_data_dir()
-    query_file = os.path.join(eval_dir, "objective_eval", "final_test", "qa_140.json")
+    project_root = Path(__file__).resolve().parent.parent.parent
+    query_file = os.path.normpath(os.path.join(project_root, "data", "objective_questions_public_80.json"))
     multimodal_ids = get_multimodal_ids_from_json(query_file)
     print(f"Multimodal IDs from JSON: {multimodal_ids}")
 
