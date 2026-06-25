@@ -29,7 +29,6 @@ from tqdm import tqdm
 
 from evaluation_toolkit import load_local_dataset, safe_json_loads
 from evaluation_toolkit.model_clients import *
-from evaluation_toolkit.utils import get_eval_data_dir
 
 load_dotenv()
 
@@ -214,8 +213,8 @@ def dump_metrics(predictions, n):
     }], columns=columns)  # ← 直接指定 columns
 
     # 结果文件路径
-    eval_dir = get_eval_data_dir()
-    results_csv = os.path.join(eval_dir, "objective_eval", "evaluation_results.csv")
+    project_root = Path(__file__).resolve().parent.parent.parent
+    results_csv = os.path.normpath(os.path.join(project_root, "eval_result", "objective_eval", "evaluation_results.csv"))
 
     # 4. 已有结果 or 创建新 DataFrame
     if os.path.exists(results_csv):
