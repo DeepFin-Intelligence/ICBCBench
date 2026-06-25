@@ -19,8 +19,8 @@ from evaluation_toolkit.subjective_eval.FACT import authority
 from evaluation_toolkit.utils import get_eval_data_dir
 
 def fact_evaluate(data, args, id_to_lang):
-    # ======= 引用链接有效性 (严格按数学定义: S_citation = (1/T) * sum(N_s,t / |U_t|) ========
-    print(" ======= 引用链接有效性 ========")
+    # ======= Citation Link Validity (Strictly by definition: S_citation = (1/T) * sum(N_s,t / |U_t|) ========
+    print(" ======= Citation Link Validity ========")
     total_tasks = 0
     doc_support_rates_list = []
 
@@ -60,12 +60,12 @@ def fact_evaluate(data, args, id_to_lang):
 
     # S_citation = (1/T) * sum(S_citation^(t))
     avg_citation_score = sum(doc_support_rates_list) / total_tasks if total_tasks > 0 else 0
-    avg_citation_score *= 100  # 调整为 0-100 范围
+    avg_citation_score *= 100  # Scale to 0-100 range
 
     print("-" * 30)
     print(f"Total Tasks (T): {total_tasks}")
     print("-" * 30)
-    print("【Citation Score - 严格按定义】")
+    print("[Citation Score - Strictly by Definition]")
     print(f"Macro Avg (per-task): {avg_citation_score:.4f}")
     print("-" * 30)
 
@@ -76,8 +76,8 @@ def fact_evaluate(data, args, id_to_lang):
     
 
 def authority_evaluate(data, args, id_to_lang):
-    # ======= 权威加权引用链接有效性 (分母严格为 |U_t|) ========
-    print(" ======= 权威加权引用链接有效性 ========")
+    # ======= Authority-Weighted Citation Validity (denominator strictly |U_t|) ========
+    print(" ======= Authority-Weighted Citation Validity ========")
     total_tasks = 0
     doc_weighted_support_rates_list = []
 
@@ -123,7 +123,7 @@ def authority_evaluate(data, args, id_to_lang):
     print("-" * 30)
     print(f"Total Tasks (T): {total_tasks}")
     print("-" * 30)
-    print("【Authority-Weighted - 严格按定义】")
+    print("[Authority-Weighted - Strictly by Definition]")
     print(f"Macro Avg (per-task): {avg_weighted_score:.4f}")
     print("-" * 30)
 
@@ -134,8 +134,8 @@ def authority_evaluate(data, args, id_to_lang):
 
 
 def time_decay_evaluate(data, args, id_to_lang, temp_timed_path=None):
-    # ========= 时间衰减 ==========
-    print("\n ========= 时间衰减 ==========")
+    # ========= Time Decay ==========
+    print("\n ========= Time Decay ==========")
     alpha = 0.002
 
     if temp_timed_path is None:
@@ -147,12 +147,12 @@ def time_decay_evaluate(data, args, id_to_lang, temp_timed_path=None):
     timed_data = filter_data_by_language(timed_data, args.language_filter, id_to_lang)
 
     total_tasks = 0
-    total_time_score_sum = 0  # 所有引用时间分的总和
-    total_time_links_count = 0  # 参与统计的引用链接总数
-    doc_avg_time_scores = []  # 每个文档的平均时间分列表
+    total_time_score_sum = 0  # Sum of all citation time scores
+    total_time_links_count = 0  # Total number of citation links included in statistics
+    doc_avg_time_scores = []  # List of average time scores per document
 
-    # 3. 遍历数据计算
-    # 基于“引用链接(URL)”维度进行统计，而非“Statement”维度
+    # 3. Iterate over data to calculate
+    # Statistics based on citation link (URL) dimension, not Statement dimension
     for d in tqdm(timed_data, desc="Time Decay Evaluate"):
         total_tasks += 1
         citations_deduped = d.get('citations_deduped', {})
@@ -167,10 +167,10 @@ def time_decay_evaluate(data, args, id_to_lang, temp_timed_path=None):
             if c.get('validate_error') is not None:
                 continue
 
-            # 获取分数
+            # Get score
             score = c['time_decay_score']
 
-            # 跳过无法解析发布时间的引用
+            # Skip citations with unparsable publication time
             if score < 0:
                 continue
 
@@ -178,18 +178,18 @@ def time_decay_evaluate(data, args, id_to_lang, temp_timed_path=None):
             total_time_score_sum += score
             total_time_links_count += 1
 
-        # 计算该文档的平均时间分
+        # Calculate average time score for this document
         if current_doc_scores:
             doc_avg = sum(current_doc_scores) / len(current_doc_scores)
             doc_avg_time_scores.append(doc_avg)
         else:
             doc_avg_time_scores.append(0)
 
-    # 4. 计算聚合指标
-    # 全局平均时间分 (Global Average based on Links)
+    # 4. Calculate aggregate metrics
+    # Global average time score (Global Average based on Links)
     global_avg_time_score = total_time_score_sum / total_time_links_count if total_time_links_count else 0
 
-    # 文档级平均分 (Average of Document Averages)
+    # Document-level average score (Average of Document Averages)
     avg_time_score_per_doc = sum(doc_avg_time_scores) / total_tasks if total_tasks > 0 else 0
 
     print(f"Total Time Links Count: {total_time_links_count}")
@@ -228,7 +228,7 @@ def source_evaluate(data, args, id_to_lang):
         source_scores = []
 
         for url, c in citations_deduped.items():
-            # 跳过验证错误的引用
+            # Skip citations with validation errors
             if c.get('validate_error') is not None:
                 continue
 
@@ -237,7 +237,7 @@ def source_evaluate(data, args, id_to_lang):
 
             publish_time = c.get('publish_time')
             time_score = calculate_time_score(publish_time, alpha=0.002)
-            # 跳过无法解析发布时间的引用
+            # Skip citations with unparsable publication time
             if time_score < 0:
                 continue
 
@@ -258,7 +258,7 @@ def source_evaluate(data, args, id_to_lang):
     avg_auth = sum(doc_auth_scores) / total_tasks if total_tasks > 0 else 0
     avg_time = sum(doc_time_scores) / total_tasks if total_tasks > 0 else 0
     avg_source = sum(doc_source_scores) / total_tasks if total_tasks > 0 else 0
-    avg_source *= 100  # 调整为 0-100 范围
+    avg_source *= 100  # Scale to 0-100 range
 
     print(f"Total Tasks (T): {total_tasks}")
     print(f"Avg Source Authority Score (S_auth): {avg_auth:.4f}")
@@ -279,42 +279,42 @@ def filter_data_by_language(data, language_filter, id_to_lang):
 
     filtered_data = []
     for d in data:
-        # 获取 jsonl 中的 id，默认为空字符串防止报错
+        # Get id from jsonl, default to empty string to avoid errors
         doc_id = str(d.get('id', ''))
         raw_lang = id_to_lang.get(doc_id, '').lower()
 
-        # 归一化判断逻辑
+        # Normalization logic
         query_language = "zh" if raw_lang in ["zh", "chinese", "中文", "zh-cn"] else "en"
 
         if query_language == language_filter:
             filtered_data.append(d)
 
-    print(f"[{language_filter} 过滤] 原始数据 {len(data)} 条 -> 过滤后保留 {len(filtered_data)} 条")
+    print(f"[{language_filter} filter] Original {len(data)} records -> Retained {len(filtered_data)} records after filtering")
     return filtered_data
 
 def run_stat(args, id_to_lang, output_csv, language_filter):
-    """执行一次统计并写入 CSV"""
-    # 临时设置语言过滤
+    """Run one round of statistics and write to CSV"""
+    # Temporarily set language filter
     original_filter = getattr(args, 'language_filter', None)
     args.language_filter = language_filter
 
-    # 1. 读取数据（每次重新读取，避免被 time_decay 修改）
+    # 1. Read data (re-read each time to avoid modification by time_decay)
     raw_data = load_jsonl(args.input_path)
 
-    # 2. 使用临时文件计算时间衰减
+    # 2. Use temporary file to calculate time decay
     temp_timed_path = os.path.join(tempfile.gettempdir(), f'finhle_temp_timed_{os.getpid()}.jsonl')
 
-    # 3. 执行四个评估并获取字典格式的结果
+    # 3. Run four evaluations and get results in dict format
     fact_res = fact_evaluate(raw_data, args, id_to_lang)
     auth_res = authority_evaluate(raw_data, args, id_to_lang)
     time_res = time_decay_evaluate(raw_data, args, id_to_lang, temp_timed_path)
     source_res = source_evaluate(raw_data, args, id_to_lang)
 
-    # 4. 清理临时文件
+    # 4. Clean up temporary file
     if os.path.exists(temp_timed_path):
         os.remove(temp_timed_path)
 
-    # 4. 组装宽表格式（每行一个模型）
+    # 4. Assemble wide table format (one row per model)
     row = {
         "Model Name": args.model_name,
         "Total Tasks": fact_res.get("Total Tasks", 0),
@@ -324,7 +324,7 @@ def run_stat(args, id_to_lang, output_csv, language_filter):
         "Avg Source Quality Score (S_source)": source_res.get("Avg Source Quality Score (S_source)", 0),
     }
 
-    # 5. 写入 CSV
+    # 5. Write to CSV
     os.makedirs(os.path.dirname(output_csv) or '.', exist_ok=True)
     file_exists = os.path.isfile(output_csv)
 
@@ -339,9 +339,9 @@ def run_stat(args, id_to_lang, output_csv, language_filter):
 
         writer.writerow(row)
 
-    print(f"\n评估结果已成功追加至: {output_csv}")
+    print(f"\nEvaluation results successfully appended to: {output_csv}")
 
-    # 恢复原始语言过滤
+    # Restore original language filter
     args.language_filter = original_filter
 
 
@@ -354,7 +354,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, required=True, help="name of the model to record")
     parser.add_argument("--input_path", type=str, required=True)
     parser.add_argument("--output_csv", type=str, required=True)
-    parser.add_argument("--query_file", type=str, default=default_query_file, help="问题 JSONL 文件路径")
+    parser.add_argument("--query_file", type=str, default=default_query_file, help="Path to the question JSONL file")
     parser.add_argument("--language_filter", type=str, required=False)
     args = parser.parse_args()
 
@@ -367,10 +367,10 @@ if __name__ == "__main__":
     }
 
     if args.language_filter:
-        # 只运行指定语言
+        # Run only the specified language
         run_stat(args, id_to_lang, args.output_csv, args.language_filter)
     else:
-        # 默认运行全部三个版本（与 ExpertCriteria/stat.py 一致）
+        # Default: run all three versions (consistent with ExpertCriteria/stat.py)
         base, ext = os.path.splitext(args.output_csv)
         for lang in [None, "zh", "en"]:
             if lang:
