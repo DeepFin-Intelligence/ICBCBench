@@ -144,9 +144,9 @@ def stat(input_dir, query_file, output_csv_path, language_filter=None):
 
 if __name__ == '__main__':
     project_root = Path(__file__).resolve().parent.parent.parent.parent
-    default_input_dir = os.path.normpath(os.path.join(project_root, "eval_result", "subjective_eval", "scores"))
+    default_input_dir = os.path.normpath(os.path.join(project_root, "eval_result", "subjective_eval", "scores", "judge_gemini-3.1-pro-preview"))
     default_query_file = os.path.normpath(os.path.join(project_root, "data", "subjective_questions_public_40.json"))
-    default_output_csv = os.path.normpath(os.path.join(project_root, "eval_result", "subjective_eval", "scores", "leaderboard.csv"))
+    default_output_csv = os.path.normpath(os.path.join(project_root, "eval_result", "subjective_eval", "scores", "judge_gemini-3.1-pro-preview", "leaderboard.csv"))
 
     parser = argparse.ArgumentParser(description="Merge multiple ExpertCriteria jsonl scores into a leaderboard CSV")
     parser.add_argument("--input_dir", type=str, default=default_input_dir, help="Directory containing jsonl scoring files")
