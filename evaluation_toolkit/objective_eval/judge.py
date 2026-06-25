@@ -33,7 +33,7 @@ from evaluation_toolkit.utils import get_eval_data_dir
 
 load_dotenv()
 
-client = MYDMX
+client = OPENROUTER
 
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts.json"), "r", encoding='utf-8') as f:
     prompt_templates = json.load(f)
@@ -238,7 +238,8 @@ def dump_metrics(predictions, n):
 def main(args):
     assert args.num_workers > 1, "num_workers must be 2 or greater"
 
-    output_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), f"final_test/judged_results/judge_{args.judge}"))
+    project_root = Path(__file__).resolve().parent.parent.parent
+    output_dir = os.path.normpath(os.path.join(project_root, "eval_result", "objective_eval", "judged_results", f"judge_{args.judge}"))
     os.makedirs(output_dir, exist_ok=True)
 
     output_filepath = f"{output_dir}/judged_{os.path.basename(args.predictions)}"
