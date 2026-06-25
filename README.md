@@ -12,7 +12,7 @@ evaluation_toolkit/
 ├── subjective_eval/                # 主观题（研究报告）评估
 │   ├── write.py                        # 调用模型撰写报告
 │   ├── ExpertCriteria/                 # 专家评分标准评分
-│   │   ├── score_by_static_criteria.py
+│   │   ├── score_by_criteria.py
 │   │   └── stat.py                     # 将 jsonl 评分结果合并为 leaderboard CSV
 │   ├── FACT/                           # 引用提取、去重、爬取、验证、统计
 │   │   ├── extract.py

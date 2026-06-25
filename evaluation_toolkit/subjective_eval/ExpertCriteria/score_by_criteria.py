@@ -19,25 +19,25 @@ from tqdm import tqdm
 from evaluation_toolkit import safe_json_loads
 from evaluation_toolkit.utils import get_eval_data_dir, get_project_root
 
-client = DMX
+client = OPENROUTER
 
 def format_prompts(criteria_json):
     prompts = {}
 
-    # 循环遍历每一个一级维度
+    # Iterate over each top-level dimension
     for dim in criteria_json['dimensions']:
         dim_id = dim['id']
         dim_name = dim['name']
 
         for sub in dim['sub_criteria']:
-            # 1. 构建该维度下的评分标准文本
+            # 1. Build the criteria text for this dimension
             criteria_text = ""
 
-            # 格式化子维度的标题
+            # Format sub-dimension title
             criteria_text += f"### 子维度 {sub['id']}: {sub['name']} (满分 {sub['max_points']} 分)\n"
             criteria_text += "评分阶梯 (Rubrics):\n"
 
-            # 格式化具体的评分细则
+            # Format detailed scoring rubrics
             for rubric in sub['rubrics']:
                 score_str = f"{rubric['score_range'][0]}-{rubric['score_range'][1]}分"
                 criteria_text += f"- [{score_str}]: {rubric['description']}\n"
@@ -45,7 +45,7 @@ def format_prompts(criteria_json):
             sub_id = sub['id'].replace('.', '_')
             sub_name = sub['name']
 
-            # 2. 将构建好的标准填入 Prompt 模板
+            # 2. Fill the built criteria into the prompt template
             prompt_template = f"""你是一位资深的研究报告评审专家。
 请阅读用户上传的研究报告，仅针对以下特定维度进行评分。
 
@@ -162,7 +162,7 @@ def format_whole_prompt(criteria_text, report_text, q_language):
         return prompt_template_zh
 
 def call_llm(messages):
-    # print(f"正在调用 LLM...")
+    # print(f"Calling LLM...")
     response = client.chat.completions.create(
         model=args.judge,
         messages=messages,
@@ -176,16 +176,16 @@ def call_llm(messages):
 
     return eval_result
 
-# 子维度分别传入prompt进行评估，目前已废弃
+# Evaluate by passing sub-dimensions into prompts separately; currently deprecated
 def evaluate_report_with_sub_criteria(report_text, eval_criteria):
-    print(f"开始评估报告 (长度: {len(report_text)} 字符)")
+    print(f"Starting report evaluation (length: {len(report_text)} characters)")
 
     final_results = {
         "total_score": 0,
         "dimensions_breakdown": []
     }
 
-    # 生成各维度 Prompt
+    # Generate prompts for each dimension
     eval_prompts = format_whole_prompt(eval_criteria, report_text)
 
     eval_result = {
@@ -193,7 +193,7 @@ def evaluate_report_with_sub_criteria(report_text, eval_criteria):
         "dimensions_breakdown": []
     }
 
-    # 遍历每一个子维度
+    # Iterate over each sub-dimension
     for dim in eval_criteria['dimensions']:
         dim_id = dim['id']
         dim_name = dim['name']
@@ -210,21 +210,21 @@ def evaluate_report_with_sub_criteria(report_text, eval_criteria):
             sub_name = sub['name']
             eval_prompt = eval_prompts[sub_id.replace('.', '_')]
 
-            print(f"正在评估维度{sub_id}: {dim_name} - {sub_name}")
+            print(f"Evaluating dimension {sub_id}: {dim_name} - {sub_name}")
 
             messages = [
                 {"role": "system", "content": eval_prompt},
-                {"role": "user", "content": f"待评测报告：\n{report_text}"}
+                {"role": "user", "content": f"Report to be evaluated:\n{report_text}"}
             ]
 
             try:
                 eval_result_str = call_llm(messages)
 
-                # 解析结果
+                # Parse result
                 clean_str = eval_result_str.replace("```json", "").replace("```", "").strip()
                 eval_result = json.loads(clean_str)
 
-                # 累加分数
+                # Accumulate score
                 sub_score = eval_result["score"]
                 dim_result["dimension_score"] += sub_score
                 dim_result["sub_dimensions_breakdown"].append({
@@ -235,28 +235,28 @@ def evaluate_report_with_sub_criteria(report_text, eval_criteria):
                 )
 
             except Exception as e:
-                print(f"  [Error] 评估维度 {sub_id} 时发生错误: {e}")
+                print(f"  [Error] Error occurred while evaluating dimension {sub_id}: {e}")
 
-        print(f"  -> {dim_name} 得分: {dim_result['dimension_score']}")
+        print(f"  -> {dim_name} score: {dim_result['dimension_score']}")
         final_results["total_score"] += dim_result["dimension_score"]
         final_results["dimensions_breakdown"].append(dim_result)
 
     return final_results
 
-# 整体维度一次评估
+# Evaluate all dimensions at once
 def evaluate_report_with_whole_criteria(report_text, eval_criteria, q_language):
-    # print(f"开始评估报告 (长度: {len(report_text)} 字符)")
+    # print(f"Starting report evaluation (length: {len(report_text)} characters)")
 
-    # 生成 Prompt
+    # Generate prompt
     eval_prompts = format_whole_prompt(eval_criteria, report_text, q_language)
 
     if eval_prompts:
-        # print("已构造评估 prompt")
+        # print("Evaluation prompt constructed")
         messages = [
             {"role": "user", "content": eval_prompts}
         ]
     else:
-        print("未构造评估 prompt")
+        print("Evaluation prompt not constructed")
         return None
 
     eval_result = {
@@ -266,7 +266,7 @@ def evaluate_report_with_whole_criteria(report_text, eval_criteria, q_language):
 
     dimension_scores_str = call_llm(messages)
 
-    # 解析结果
+    # Parse result
     dimension_scores = safe_json_loads(dimension_scores_str)
 
     eval_result['total_score'] = sum(int(dimension_score["score"]) for dimension_score in dimension_scores)
@@ -276,35 +276,35 @@ def evaluate_report_with_whole_criteria(report_text, eval_criteria, q_language):
 
 def process_single_report(task_id, report_content, args, question_dict):
     """
-    处理单个评估任务的工作线程函数
-    返回: (result_dict, log_message)
+    Worker function for processing a single evaluation task.
+    Returns: (result_dict, log_message)
     """
     q_item = question_dict.get(task_id)
     if q_item is None:
-        return None, f"未找到task_id为 {task_id} 的话题"
+        return None, f"Topic with task_id {task_id} not found"
 
-    # 加载 question
+    # Load question
     q_language = q_item.get('language', 'zh')
     task_prompt = q_item['question'] if q_language == 'zh' else q_item['question_en']
 
     if not task_prompt:
-        return None, f"task_id为 {task_id} 的题目内容为空"
+        return None, f"Question content for task_id {task_id} is empty"
 
-    # 加载 criteria
+    # Load criteria
     eval_criteria = q_item['expert_evaluation_criteria'] if q_language == 'zh' else q_item[
         'expert_evaluation_criteria_en']
 
-    # 加载文章
+    # Load article
     eval_report = report_content["response"]
     model_string = report_content["model"]
 
-    # openai deep research 的引用链接写在文中，评估时需去除
+    # OpenAI deep research citation links are embedded in the text and need to be removed for evaluation
     DRs_to_check = ["o3-deep-research-ssvip", "o4-mini-deep-research"]
     if any(dr_model in model_string for dr_model in DRs_to_check):
         eval_report = re.sub(r'\(\[.*?\]\(.*?\)\)', '', eval_report)
         eval_report = re.sub(r' +', ' ', eval_report).strip()
 
-    # 执行评估 (捕获可能发生的异常，防止单个任务崩溃导致整个线程池死掉)
+    # Execute evaluation (catch exceptions to prevent a single task failure from crashing the entire thread pool)
     try:
         new_score_record = evaluate_report_with_whole_criteria(eval_report, eval_criteria, q_language)
 
@@ -314,23 +314,23 @@ def process_single_report(task_id, report_content, args, question_dict):
             "question": task_prompt,
             **new_score_record
         }
-        log_msg = f"Task {task_id} 完成 | 最终总分: {new_score_record.get('total_score')}"
+        log_msg = f"Task {task_id} completed | Final total score: {new_score_record.get('total_score')}"
         return result, log_msg
 
     except Exception as e:
-        return None, f"Task {task_id} 评估过程中发生异常: {str(e)}"
+        return None, f"Exception occurred during evaluation of Task {task_id}: {str(e)}"
 
 def main(args):
-    # 从 topics.json 加载数据
+    # Load data from topics.json
     with open(args.question_path, 'r', encoding='utf-8') as f:
         question_data = json.load(f)
 
     question_dict = {item["id"]: item for item in question_data}
 
-    # 加载待评分报告
+    # Load reports to be scored
     report_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(args.question_path)), f"dr_reports/reports_{args.report_model}.json"))
 
-    # 读取已生成报告内容
+    # Read generated report content
     with open(report_path, "r", encoding="utf-8") as f:
         reports_data = json.load(f)
 
@@ -338,65 +338,65 @@ def main(args):
     output_dir = os.path.join(args.output_dir, f"judge_{args.judge}")
     output_path = os.path.join(output_dir, f"scores_{args.report_model}.jsonl")
 
-    print(f"预期输出文件: {output_path}")
+    print(f"Expected output file: {output_path}")
 
-    # 检查是否存在已保存的评分结果
+    # Check for existing saved scoring results
     already_scored_tasks = set()
 
     if os.path.exists(output_path):
         try:
             with open(output_path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    if line.strip():  # 确保不是空行
+                    if line.strip():  # ensure not an empty line
                         score_record = json.loads(line)
                         already_scored_tasks.add(score_record["task_id"])
         except Exception as e:
-            print(f"读取已有评分结果时出错: {e}")
+            print(f"Error reading existing scoring results: {e}")
             already_scored_tasks = set()
     else:
-        print(f"{output_path} 不存在，将创建该文件")
+        print(f"{output_path} does not exist, will create it")
         os.makedirs(output_dir, exist_ok=True)
 
-    # 过滤出未评分的报告
+    # Filter out unscored reports
     unprocessed_reports = {}
     for task_id, report_content in reports_data.items():
         if task_id not in already_scored_tasks:
             unprocessed_reports[task_id] = report_content
         else:
-            print(f"任务 {task_id} 已经评分，跳过")
+            print(f"Task {task_id} already scored, skipping")
 
-    print(f"总共 {len(reports_data)} 个任务，{len(unprocessed_reports)} 个任务待评分")
+    print(f"Total {len(reports_data)} tasks, {len(unprocessed_reports)} tasks pending scoring")
 
     if not unprocessed_reports:
-        print("没有需要评分的新任务，程序退出")
+        print("No new tasks to score, exiting")
         exit(0)
 
-    save_interval = 1  # 每10个任务保存一次，可根据需要调整
+    save_interval = 1  # save every N tasks, adjust as needed
 
-    # 提前根据 max_samples 截断任务列表，避免提交多余任务
+    # Truncate task list in advance based on max_samples to avoid submitting extra tasks
     items_to_process = list(unprocessed_reports.items())
     if args.max_samples:
         items_to_process = items_to_process[:args.max_samples]
-        print(f"设定了 max_samples = {args.max_samples}，即将处理 {len(items_to_process)} 个任务")
+        print(f"Set max_samples = {args.max_samples}, will process {len(items_to_process)} tasks")
 
     buffer = []
     total_processed = 0
-    # 可以在 args 中配置并发数，如果没有配置，默认为 10
+    # Concurrency can be configured in args, default is 10 if not set
     max_workers = getattr(args, 'max_workers', 10)
 
-    print(f"\n开启并发评估，并发数: {max_workers}")
+    print(f"\nStarting concurrent evaluation, concurrency: {max_workers}")
 
-    # 使用线程池
+    # Use thread pool
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 提交所有任务到线程池
+        # Submit all tasks to the thread pool
         future_to_task = {
             executor.submit(process_single_report, task_id, report_content, args, question_dict): task_id
             for task_id, report_content in items_to_process
         }
 
-        # 使用 as_completed 结合 tqdm 获取完成的结果（谁先完成就先处理谁）
+        # Use as_completed with tqdm to get completed results as they finish
         for future in tqdm(concurrent.futures.as_completed(future_to_task), total=len(items_to_process),
-                           desc="评分进度"):
+                           desc="Scoring progress"):
             task_id = future_to_task[future]
 
             try:
@@ -408,42 +408,42 @@ def main(args):
                 else:
                     tqdm.write(f"[SKIP] {log_msg}")
 
-                    # 在主线程中集中处理文件保存，绝对线程安全
+                    # Handle file saving in the main thread to ensure thread safety
                     if len(buffer) >= save_interval:
-                        # tqdm.write(f"已处理 {total_processed} 个任务，正在保存中间结果...")
+                        # tqdm.write(f"Processed {total_processed} tasks, saving intermediate results...")
                         with open(output_path, "a", encoding="utf-8") as f:
                             for item in buffer:
                                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
                         buffer.clear()
-                        # tqdm.write("中间结果已保存")
+                        # tqdm.write("Intermediate results saved")
 
             except Exception as exc:
-                tqdm.write(f"任务 {task_id} 引发了致命异常: {exc}")
+                tqdm.write(f"Task {task_id} raised a fatal exception: {exc}")
 
-    # 保存剩余结果到文件
+    # Save remaining results to file
     if len(buffer) > 0:
-        print(f"\n正在保存最后 {len(buffer)} 个任务的结果...")
+        print(f"\nSaving results of the last {len(buffer)} tasks...")
         with open(output_path, "a", encoding="utf-8") as f:
             for item in buffer:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        print("所有结果已保存")
+        print("All results saved")
 
-    print(f"共处理 {total_processed} 个任务，评分结果已保存至: {output_path}")
+    print(f"Processed {total_processed} tasks in total, scoring results saved to: {output_path}")
 
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="证券研究报告自动评分系统")
-    parser.add_argument("--judge", type=str, required=True, help="打分模型")
-    parser.add_argument("--report_model", type=str, required=True, help="待评估的模型")
+    parser = argparse.ArgumentParser(description="Automatic Scoring System for Securities Research Reports")
+    parser.add_argument("--judge", type=str, required=True, help="Scoring model")
+    parser.add_argument("--report_model", type=str, required=True, help="Model to be evaluated")
     project_root = get_project_root()
     eval_dir = get_eval_data_dir()
     default_question_path = os.path.join(project_root, "report_collect_and_eval", "subjective_report_questions.jsonl")
     default_output_dir = os.path.join(eval_dir, "subjective_eval", "test_ICBC_DR_Tasks", "scores")
-    parser.add_argument("--question_path", type=str, default=default_question_path, help="问题和评分标准JSON文件路径")
-    parser.add_argument("--output_dir", type=str, default=default_output_dir, help="评分结果输出文件路径")
-    parser.add_argument("--max_samples", type=int, default=None, help="最大评估样本数，None表示评估所有未评分任务")
-    parser.add_argument("--max_workers", type=int, default=10, help="并发数")
+    parser.add_argument("--question_path", type=str, default=default_question_path, help="Path to the question and scoring criteria JSON file")
+    parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Path to save scoring results")
+    parser.add_argument("--max_samples", type=int, default=None, help="Maximum number of samples to evaluate, None means evaluate all unscored tasks")
+    parser.add_argument("--max_workers", type=int, default=10, help="Number of concurrent workers")
 
     args = parser.parse_args()
     main(args)
