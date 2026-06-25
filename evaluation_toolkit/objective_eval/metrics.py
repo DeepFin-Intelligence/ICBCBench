@@ -23,7 +23,7 @@ def calib_err(confidence, correct, p='2', beta=100):
     idxs = np.argsort(confidence)
     confidence = confidence[idxs]
     correct = correct[idxs]
-    # 濡傛灉鎬绘牱鏈暟 < beta锛屽垯鏁翠釜鏁版嵁浣滀负涓€涓?bin
+    # If total sample size < beta, use the entire data as a single bin
     if len(confidence) < beta:
         bins = [[0, len(confidence)]]
     else:
@@ -32,7 +32,7 @@ def calib_err(confidence, correct, p='2', beta=100):
 
     cerr = 0
     total_examples = len(confidence)
-    for start, end in bins:  # 閬嶅巻姣忎釜 bin
+    for start, end in bins:  # Iterate over each bin
         bin_confidence = confidence[start:end]
         bin_correct = correct[start:end]
         num_examples_in_bin = len(bin_confidence)
@@ -86,27 +86,31 @@ def dump_metrics(prediction_model_name, judge_model, judged_results, n, results_
     print(f"Accuracy: {accuracy}% +/- {confidence_half_width}% | n = {n}")
     print(f"Calibration Error: {calibration_error}")
 
-    # 淇濆瓨缁撴灉
-    # 鏋勯€犳柊涓€琛?    columns = ["Model", "Accuracy (%)", "CalibrationError (%)", "Judge"]
+    # Save results
+    # Construct new row
+    columns = ["Model", "Accuracy (%)", "CalibrationError (%)", "Judge"]
     new_row = pd.DataFrame([{
         "Model": prediction_model_name,
         "Accuracy (%)": accuracy,
         "CalibrationError (%)": calibration_error,
         "Judge": judge_model
-    }], columns=columns)  # 鈫?鐩存帴鎸囧畾 columns
+    }], columns=columns)  # Specify columns directly
 
-    # 4. 宸叉湁缁撴灉 or 鍒涘缓鏂?DataFrame
+    # Existing results or create new DataFrame
     if os.path.exists(results_csv_path):
         df_existing = pd.read_csv(results_csv_path)
     else:
         df_existing = pd.DataFrame(columns=["Model", "Accuracy (%)", "CalibrationError (%)"])
 
-    # 鏄惁宸插瓨鍦ㄨ妯″瀷鐨勭粨鏋?    if prediction_model_name in df_existing["Model"].values:
+    # Check if result for this model already exists
+    if prediction_model_name in df_existing["Model"].values:
         df_existing = df_existing[df_existing["Model"] != prediction_model_name]
 
-    # 鍔犲叆鏂扮粨鏋?    df_new = pd.concat([df_existing, new_row], ignore_index=True)
+    # Add new result
+    df_new = pd.concat([df_existing, new_row], ignore_index=True)
 
-    # 淇濆瓨鏂扮粨鏋?    df_new.to_csv(results_csv_path, index=False, encoding="utf-8")
+    # Save new result
+    df_new.to_csv(results_csv_path, index=False, encoding="utf-8")
     print(f"Results saved to {results_csv_path}")
 
 
@@ -138,7 +142,7 @@ def dump_all_metrics(judge_model, language_filter, multimodal_ids=None):
         multimodal_set = {str(tid) for tid in multimodal_ids}
         print(f"Loaded multimodal exclusion: {len(multimodal_set)} IDs (text-only = remaining after exclusion)")
 
-    # 缁撴灉鏂囦欢璺緞
+    # Result file path
     results_dir = os.path.join(eval_dir, "objective_eval", "final_test", "judged_results", f"judge_{judge_model}")
     suffix_parts = []
     if language_filter:
@@ -155,8 +159,9 @@ def dump_all_metrics(judge_model, language_filter, multimodal_ids=None):
     for filename in os.listdir(judged_dir):
         if filename.endswith(".json"):
             file_path = os.path.join(judged_dir, filename)
-            # 鎻愬彇妯″瀷鍚?            predictions_filename = os.path.basename(file_path)
-            # 鐢ㄤ笅鍒掔嚎鍒嗗壊骞跺彇鏈€鍚庝竴閮ㄥ垎
+            # Extract model name
+            predictions_filename = os.path.basename(file_path)
+            # Split by underscore and take the last part
             prediction_model_name = predictions_filename.rsplit("_", 1)[-1].replace(".json", "")
             with open(file_path, "r", encoding="utf-8") as f:
                 judged_results = json.load(f)
@@ -168,11 +173,11 @@ def dump_all_metrics(judge_model, language_filter, multimodal_ids=None):
                 if language_filter:
                     filtered_results = {}
                     for k, v in judged_results.items():
-                        # 鑾峰彇璇?ID 瀵瑰簲鐨勮瑷€锛岄粯璁よ涓?"en"
+                        # Get language for this ID, default to "en"
                         raw_lang = id_to_lang.get(str(k), "")
-                        query_language = "zh" if raw_lang in ["zh", "chinese", "涓枃"] else "en"
+                        query_language = "zh" if raw_lang in ["zh", "chinese", "中文"] else "en"
 
-                        # 浠呬繚鐣欏尮閰嶇殑璇█
+                        # Keep only matching language
                         if query_language == language_filter:
                             filtered_results[k] = v
 
