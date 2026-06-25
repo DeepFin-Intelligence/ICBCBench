@@ -55,10 +55,10 @@ Default data files are expected under the project root:
 
 - Objective questions: `data/objective_questions_public_80.json`
 - Subjective questions: `data/subjective_questions_public_40.json`
-- Model reports: `eval_result/subjective_eval/dr_reports/reports_<model>.json`
 
 Generated evaluation results are written to `eval_result/`:
 
+- Model reports: `eval_result/subjective_eval/dr_reports/reports_<model>.json`
 - Objective predictions: `eval_result/objective_eval/prediction_results/<model>.json`
 - Objective judged results: `eval_result/objective_eval/judged_results/judge_<judge>/judged_<model>.json`
 - Objective metrics: `eval_result/objective_eval/evaluation_results.csv`
@@ -86,7 +86,7 @@ Outputs: `eval_result/objective_eval/prediction_results/gpt-4o.json`
 python evaluation_toolkit/objective_eval/judge.py \
     --local_dataset data/objective_questions_public_80.json \
     --predictions eval_result/objective_eval/prediction_results/gpt-4o.json \
-    --judge gemini-1.5-pro \
+    --judge gpt-5.4 \
     --num_workers 5
 ```
 
@@ -119,7 +119,7 @@ Outputs: `eval_result/subjective_eval/dr_reports/reports_gpt-4o.json`
 
 ```bash
 python evaluation_toolkit/subjective_eval/ExpertCriteria/score_by_criteria.py \
-    --judge gemini-1.5-pro \
+    --judge gemini-3.1-pro \
     --report_model gpt-4o
 ```
 
