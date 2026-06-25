@@ -1,7 +1,5 @@
 # ICBCBench Evaluation Toolkit
 
-本目录整理自 `eval/`，包含 ICBCBench / FinHLE / FinResearch Benchmark 中可独立分享的核心评估代码。
-
 ## 目录结构
 
 ```
@@ -67,10 +65,8 @@ python -m evaluation_toolkit.objective_eval.predict \
 export EVAL_DATA_DIR="/path/to/your/eval_data"
 ```
 
-- 客观题数据：`$EVAL_DATA_DIR/objective_eval/v2_obj_public-private_test/`
-- 主观题数据：`$EVAL_DATA_DIR/subjective_eval/final_test/`
-
-所有原 `D:\AI_Lab_ICBC\FinHLE\...` 绝对路径已替换为基于 `EVAL_DATA_DIR` 的相对路径。如需进一步自定义，可通过各脚本的命令行参数覆盖。
+- 客观题数据：`$EVAL_DATA_DIR/objective_questions_public_80.json`
+- 主观题数据：`$EVAL_DATA_DIR/subjective_questions_public_40.json`
 
 ## 环境变量
 
