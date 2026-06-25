@@ -1,6 +1,6 @@
-# FinHLE Evaluation Toolkit
+# ICBCBench Evaluation Toolkit
 
-本目录整理自 `eval/`，包含 FinHLE / FinResearch Benchmark 中可独立分享的核心评估代码。
+本目录整理自 `eval/`，包含 ICBCBench / FinHLE / FinResearch Benchmark 中可独立分享的核心评估代码。
 
 ## 目录结构
 
@@ -36,7 +36,7 @@ evaluation_toolkit/
 ## 安装依赖
 
 ```bash
-pip install -r evaluation_toolkit/requirements.txt
+pip install -r requirements.txt
 ```
 
 > 注意：原项目根目录的 `requirements.txt` 也包含相关依赖，二者可任选其一安装。
@@ -48,7 +48,6 @@ pip install -r evaluation_toolkit/requirements.txt
 ### 直接运行（推荐）
 
 ```bash
-cd FinHLE
 python evaluation_toolkit/objective_eval/predict.py \
     --local_dataset "..." --model gpt-4o --num_workers 2
 ```
@@ -56,7 +55,6 @@ python evaluation_toolkit/objective_eval/predict.py \
 ### 模块方式运行
 
 ```bash
-cd FinHLE
 python -m evaluation_toolkit.objective_eval.predict \
     --local_dataset "..." --model gpt-4o --num_workers 2
 ```
