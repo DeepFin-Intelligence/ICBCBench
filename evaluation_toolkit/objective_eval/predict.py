@@ -46,9 +46,9 @@ def resolve_attachment_path(file_path):
     if os.path.isabs(file_path):
         return file_path
     # predict.py is in evaluation_toolkit/objective_eval/
-    # attachments are in eval/objective_eval/final_test/attachments/
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.normpath(os.path.join(base_dir, "final_test", file_path))
+    # attachments are in data/
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return os.path.normpath(os.path.join(project_root, "data", file_path))
 
 
 def load_image_as_base64(image_path):
@@ -408,7 +408,8 @@ def main(args):
     if args.max_samples:
         questions = questions[:args.max_samples]
 
-    output_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "final_test/prediction_results"))
+    project_root = Path(__file__).resolve().parent.parent.parent
+    output_dir = os.path.normpath(os.path.join(project_root, "eval_result", "objective_eval", "prediction_results"))
     os.makedirs(output_dir, exist_ok=True)
 
     output_filepath = f"{output_dir}/{os.path.basename(args.model)}.json"
