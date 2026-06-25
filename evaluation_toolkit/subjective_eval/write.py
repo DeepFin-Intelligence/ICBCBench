@@ -22,7 +22,7 @@ from evaluation_toolkit.DR_clients import *
 
 load_dotenv()
 
-client = DMX
+client = OPENROUTER
 
 def format_message(topic):
     language = "zh" if topic["language"] in ["zh", "chinese", "中文"] else "en"
@@ -41,7 +41,7 @@ def format_message(topic):
 def attempt_query(topic):
     messages = format_message(topic)
 
-    models_to_check = ["o1", "o3", "gpt-4o-search-preview", "gpt-4o-mini-search-preview", "claude-opus-4-7"]    # 不接受 temperature 参数的模型
+    models_to_check = ["o1", "o3", "gpt-4o-search-preview", "gpt-4o-mini-search-preview", "claude-opus-4-7"]    # Models that do not accept the temperature parameter
 
     DR_models = {
         "gemini-deep-research": GeminiDeepResearch(),
@@ -111,22 +111,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 def attempt_all_concurrent(topics):
     results = []
 
-    # max_workers 定义了同时运行的最大线程数（即并发量）
+    # max_workers defines the maximum number of concurrent threads
     with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
-        # 1. 提交所有任务到线程池，并创建一个字典来保存 future 对象
+        # 1. Submit all tasks to the thread pool
         futures = [executor.submit(attempt_query, t) for t in topics]
 
-        # 2. as_completed 会在某个任务完成时立刻生成 (yield) 结果
-        # 结合 tqdm 来实时更新进度条
+        # 2. as_completed yields results as soon as a task finishes
+        # Use tqdm to update the progress bar in real time
         for future in tqdm(as_completed(futures), total=len(topics)):
-            result = future.result()  # 获取执行结果
+            result = future.result()  # Get execution result
             results.append(result)
 
     return results
 
 def main(args):
 
-    if args.local_dataset:  # load from local dataset
+    if args.local_dataset:  # Load from local dataset
         dataset = load_local_dataset(args.local_dataset)
     else:
         dataset = None
@@ -138,10 +138,11 @@ def main(args):
     if args.max_samples:
         topics = topics[:args.max_samples]
 
-    output_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "final_test/dr_reports"))
+    project_root = Path(__file__).resolve().parent.parent.parent
+    output_dir = os.path.normpath(os.path.join(project_root, "eval_result", "subjective_eval", "dr_reports"))
     os.makedirs(output_dir, exist_ok=True)
 
-    output_filepath = f"{output_dir}\\reports_{os.path.basename(args.model)}.json"
+    output_filepath = os.path.normpath(os.path.join(output_dir, f"reports_{os.path.basename(args.model)}.json"))
 
     # load only questions without responses
     if os.path.exists(output_filepath):
@@ -149,11 +150,11 @@ def main(args):
             predictions = json.load(f)
         processed_ids = list(predictions.keys())
         topics = [t for t in topics if str(t["id"]) not in processed_ids]
-        print(f"已加载之前的预测结果，共 {len(predictions)} 个已完成的任务")
-        print(f"剩余 {len(topics)} 个话题待处理")
+        print(f"Loaded previous predictions, {len(predictions)} completed tasks")
+        print(f"Remaining {len(topics)} topics to process")
     else:
         predictions = {}
-        print(f"未找到先前的输出文件，将创建新的结果文件: {output_filepath}")
+        print(f"Previous output file not found, will create new result file: {output_filepath}")
 
     results = attempt_all_concurrent(topics)
 
@@ -168,7 +169,7 @@ def main(args):
             "usage": usage
         }
 
-    # cache responses
+    # Cache responses
     with open(output_filepath, "w", encoding='utf-8') as f:
         json.dump(predictions, f, indent=4, ensure_ascii=False)
 
