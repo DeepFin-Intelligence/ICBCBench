@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 load_dotenv()
 
-client = DMX
+client = OPENROUTER
 
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts.json"), "r", encoding='utf-8') as f:
     prompt_templates = json.load(f)
