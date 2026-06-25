@@ -281,7 +281,7 @@ def attempt_question(question):
             tokens = response.get("usage", None)
         except Exception as e:
             error_msg = str(e).lower()
-            # 模型不支持多模态格式：404(no image input) 或 400(param validation error)
+            # Model does not support multimodal format: 404 (no image input) or 400 (param validation error)
             if ("image input" in error_msg or "no endpoints found" in error_msg
                     or "request param validation error" in error_msg
                     or "has invalid field" in error_msg
@@ -315,7 +315,7 @@ def attempt_question(question):
             error_msg = str(e)
             error_code = getattr(e, 'status_code', None)
 
-            # 如果是因为模型不支持多模态格式，自动回退到纯文本模式重试
+            # If the model does not support multimodal format, auto-fallback to text-only mode
             is_multimodal_error = (
                 (error_code == 404 and "image input" in error_msg.lower())
                 or (error_code == 400 and ("request param validation error" in error_msg.lower()
@@ -343,44 +343,44 @@ def attempt_question(question):
             else:
                 print("\nError:", e)
 
-            # 根据错误类型决定是否终止程序
+            # Decide whether to exit based on error type
             if content is None:
                 if error_code == 401:
-                    print("致命错误：API 认证失败，请检查 API Key")
+                    print("Fatal error: API authentication failed, please check API key")
                     sys.exit(1)
                 elif error_code == 403:
-                    print("致命错误：无权访问该模型，请检查权限")
+                    print("Fatal error: no permission to access this model, please check permissions")
                     sys.exit(1)
                 elif error_code == 404:
-                    print(f"致命错误：模型 '{args.model}' 不存在")
+                    print(f"Fatal error: model '{args.model}' not found")
                     sys.exit(1)
                 elif error_code == 503:
-                    print(f"致命错误：模型 '{args.model}' 不存在")
+                    print(f"Fatal error: model '{args.model}' not found")
                     sys.exit(1)
                 elif error_code == 500:
-                    print("服务器内部错误，跳过此问题")
-                    return None  # 非致命，继续处理其他问题
+                    print("Internal server error, skipping this question")
+                    return None  # Non-fatal, continue processing other questions
                 elif error_code == 429:
-                    print("速率限制，建议降低并发数 (--num_workers)")
-                    return None  # 可以选择继续或退出
+                    print("Rate limit hit, consider lowering --num_workers")
+                    return None  # Can choose to continue or exit
                 else:
-                    # 网络错误等其他问题，继续处理
+                    # Network errors and other issues, continue processing
                     return None
 
     if content is None:  # failed
-        print(f"\n警告：问题 {question['id']} 返回空内容")
+        print(f"\nWarning: question {question['id']} returned empty content")
         return None
 
     return question["id"], content, tokens
 
 def attempt_all(questions):
     results = []
-    # 使用线程池控制并发数 (num_workers)
+    # Use thread pool to control concurrency (num_workers)
     with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
-        # 提交所有任务
+        # Submit all tasks
         future_to_q = {executor.submit(attempt_question, q): q for q in questions}
 
-        # 使用 tqdm 显示进度
+        # Show progress with tqdm
         for future in tqdm(as_completed(future_to_q), total=len(questions)):
             try:
                 res = future.result()
