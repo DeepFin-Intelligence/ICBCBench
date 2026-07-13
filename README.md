@@ -1,6 +1,22 @@
-# ICBCBench Evaluation Toolkit
+<h1 align="center">ICBCBench: An Industry Consortium Benchmark for Financial Deep Research</h1>
 
-This repository contains the evaluation toolkit for the ICBCBench project, including objective question evaluation and subjective research report evaluation.
+<div align="center">
+<a href="https://arxiv.org/abs/2606.17458" target="_blank"><img src=https://img.shields.io/badge/arXiv-b5212f.svg?logo=arxiv></a>
+<a href="https://huggingface.co/datasets/DeepFin-Intelligence/ICBCBench"><img alt="Dataset" src="https://img.shields.io/badge/🤗%20Dataset-orange?color=FF6F00"></a>
+<a href="https://huggingface.co/spaces/DeepFin-Intelligence/ICBCBench-Leaderboard"><img alt="Leaderboard" src="https://img.shields.io/badge/🏆%20Leaderboard-yellow?color=FFD700"></a>
+<a href="https://github.com/DeepFin-Intelligence/ICBCBench/blob/main/LICENSE"><img src="https://img.shields.io/badge/Code_License-MIT-blue" alt="license"></a>
+</div>
+
+
+## Overview
+
+ICBCBench is an industry consortium benchmark for evaluating financial Deep Research Agents in real-world research scenarios. It consists of bilingual objective and subjective tasks across major financial sectors, including capital markets, banking, insurance, and related financial services. Developed with over 50 contributors from more than 40 financial and academic organizations, ICBCBench combines verifiable question answering with expert-aligned long-form report evaluation to assess retrieval–reasoning accuracy, factual grounding, citation reliability, and end-to-end report quality.
+
+
+ <p align="center">
+  <img src="./images/overview.png" alt="ICBCBench Overview" width="100%"/>
+</p>
+
 
 ## Directory Structure
 
@@ -170,3 +186,28 @@ S_final = alpha * S_expert + beta * S_citation + gamma * S_source
 - Use `--max_samples` to limit the number of samples during testing.
 - Set `--num_workers` / `--max_workers` according to your API rate limit.
 - The FACT pipeline expects `citations_deduped` in the input data with fields such as `facts`, `validate_res`, `publish_time`, and `true_url`.
+
+
+## Contact
+
+For questions or feedback about ICBCBench, please contact:
+
+- **Weiya Li**: [weiyali126@outlook.com](mailto:weiyali126@outlook.com)
+- **Zhiwei Tang**: [zwtang1220@gmail.com](mailto:zwtang1220@gmail.com)
+- **Yizhou He**: [jonah_he@163.com](mailto:jonah_he@163.com)
+- **Li Guo**: [guo_li@fudan.edu.cn](mailto:guo_li@fudan.edu.cn)
+- **Linfeng Zhang**: [zhanglinfeng@sjtu.edu.cn](mailto:zhanglinfeng@sjtu.edu.cn)
+
+## Citation
+
+```bibtex
+@misc{li2026icbcbenchindustryconsortiumbenchmark,
+      title={ICBCBench: An Industry Consortium Benchmark for Financial Deep Research}, 
+      author={Weiya Li and Zhiwei Tang and Yizhou He and Chenghao Wang and Liang Feng and Xiao Sun and Dongrui Liu and Zichen Wen and Hu Wei and Jinghang Wang and Yi Luo and Li Guo and Linfeng Zhang},
+      year={2026},
+      eprint={2606.17458},
+      archivePrefix={arXiv},
+      primaryClass={cs.CE},
+      url={https://arxiv.org/abs/2606.17458}, 
+}
+``` 
