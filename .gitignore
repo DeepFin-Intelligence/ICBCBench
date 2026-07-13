@@ -205,3 +205,5 @@ __marimo__/
 # Attachments and evaluation results should not be committed
 data/attachments/
 eval_result/
+
+.DS_Store
