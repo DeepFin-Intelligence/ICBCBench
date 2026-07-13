@@ -14,7 +14,7 @@ ICBCBench is an industry consortium benchmark for evaluating financial Deep Rese
 
 
  <p align="center">
-  <img src="./images/overview.png" alt="ICBCBench Overview" width="100%"/>
+  <img src="./images/overview.png" alt="ICBCBench Overview" width="90%"/>
 </p>
 
 
