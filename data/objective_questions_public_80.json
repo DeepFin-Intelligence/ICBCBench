@@ -250,7 +250,7 @@
   },
   {
     "id": "25",
-    "question": "You are currently the chief analyst responsible for G-SIB bank capital modeling at an institution. Based on BNP Paribas' 3Q25 performance appendices and related charts, calculate the implied total Risk-Weighted Assets (Total RWA) of BNP Paribas as of the end of the third quarter of 2025 (unit: billion euros；retain two decimal places)?",
+    "question": "You are currently the chief analyst responsible for G-SIB bank capital modeling at an institution.\nOn 18 December 2025, BNP Paribas announced that exclusive negotiations are ongoing between BNPP (owner of Arval) and Mercedes-Benz Group for the acquisition of a 100% stake in Athlon, a vehicle leasing company with a fleet of c.0.4 million vehicles across 20 countries; the acquisition is expected to complete in 2026. The transaction is expected to have a negative impact of approximately 13 basis points (bps) on the Group's CET1 ratio, which stood at 12.5% as of Q3 2025. To quantify the precise capital consumption of this deal, you first need to establish the Group's total Risk-Weighted Assets base.\nBased on BNP Paribas' 3Q25 performance appendices and related charts (see the two attached figures: the CIB 9M25 Dashboard, which discloses the CIB division's end-of-period RWA, and the divisional breakdown chart, which shows CIB's percentage share of Group RWA), calculate the implied total Risk-Weighted Assets (Total RWA) of BNP Paribas as of the end of the third quarter of 2025 (unit: billion euros; retain two decimal places).",
     "answer": "754.71",
     "classification": "Banking-Risk Management",
     "classification_code": "BNK-RSK",
@@ -266,11 +266,6 @@
         "original_filename": "CIB占比.png",
         "mime_type": "image/png",
         "file_path": "attachments/en_6_CIB占比.png"
-      },
-      {
-        "original_filename": "20251224_Barclays_BNP-FP_BNP_Paribas_SA-_UPDATE-_BNPP_in_exclusive_negotiations_t.pdf",
-        "mime_type": "application/pdf",
-        "file_path": "attachments/en_6_20251224_Barclays_BNP-FP_BNP_Paribas_SA-_UPDATE-_BNPP_in_exclusive_negotiations_t.pdf"
       }
     ]
   },
@@ -401,29 +396,13 @@
   },
   {
     "id": "38",
-    "question": "As a senior financial analyst, you are quantitatively evaluating the capital efficiency of BNP Paribas (BNPP) regarding its strategic acquisition of Athlon. According to the Barclays Equity Research report updated on December 18, 2025, BNPP intends to acquire a 100% stake in Athlon, a transaction expected to result in a negative impact of approximately 13 basis points (bps) on the Group's Common Equity Tier 1 (CET1) ratio. You must determine the precise capital consumption of this deal based only on the research report and official financial supplements:\n1. Based on the RWA value of the Corporate & Institutional Banking (CIB) division, determine the Group’s Total Risk-Weighted Assets (RWA) base for Q3 2025.\n2. Calculate the accurate capital consumption (Invested Capital) required for the 100% acquisition of Athlon, assuming the 13 bps CET1 impact is applied strictly to the Total RWA base derived in the previous step.\n3.Provide your answer in units of 100 million Euros, rounded to two decimal places.",
+    "question": "As a senior financial analyst, you are quantitatively evaluating the capital efficiency of BNP Paribas (BNPP) regarding its strategic acquisition of Athlon.\nBNPP announced that exclusive negotiations are ongoing between BNPP (owner of Arval) and Mercedes-Benz Group for the acquisition of a 100% stake in Athlon, a vehicle leasing company with a fleet of c.0.4 million vehicles across 20 countries. The acquisition is expected to complete in 2026. According to the research report, the transaction is expected to result in a negative impact of approximately 13 basis points (bps) on the Group's Common Equity Tier 1 (CET1) ratio — an impact already embedded in the Group's capital trajectory toward its 13% CET1 target by end-2027 (the Group's CET1 ratio stood at 12.5% as of Q3 2025).\nYou must determine the precise capital consumption of this deal based only on the information above and BNP Paribas' official, publicly available 3Q25 results publications (press release and results presentation, both published on 28 October 2025):\nBased on the RWA value disclosed for the Corporate & Institutional Banking (CIB) division — and the RWA of the Group's other divisions — determine the Group's Total RWA base as of Q3 2025.\nCalculate the accurate capital consumption (Invested Capital) for the 100% acquisition of Athlon, applying the 13 bps CET1 impact strictly to the Total RWA base derived above.\nProvide your answer in units of 100 million Euros, rounded to two decimal places.",
     "answer": "9.81",
     "classification": "Banking-Capital Markets Intermediation",
     "classification_code": "BNK-CMT",
-    "modality": "Multi-Modal",
+    "modality": "Text-Only",
     "language": "en",
-    "attachment": [
-      {
-        "original_filename": "CIB.png",
-        "mime_type": "image/png",
-        "file_path": "attachments/en_36_CIB.png"
-      },
-      {
-        "original_filename": "20251224_Barclays_BNP-FP_BNP_Paribas_SA-_UPDATE-_BNPP_in_exclusive_negotiations_t.pdf",
-        "mime_type": "application/pdf",
-        "file_path": "attachments/en_36_20251224_Barclays_BNP-FP_BNP_Paribas_SA-_UPDATE-_BNPP_in_exclusive_negotiations_t.pdf"
-      },
-      {
-        "original_filename": "CIB占比.png",
-        "mime_type": "image/png",
-        "file_path": "attachments/en_36_CIB占比.png"
-      }
-    ]
+    "attachment": []
   },
   {
     "id": "39",
