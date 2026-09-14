@@ -203,7 +203,7 @@ __marimo__/
 
 # Project-specific generated data
 # Attachments and evaluation results should not be committed
-data/attachments/
+# data/attachments/
 eval_result/
 
 .DS_Store
