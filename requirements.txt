@@ -1,13 +1,17 @@
 # Core API clients
-openai>=1.0
+openai>=1.93.0
 dashscope
-google-genai
+google-genai>=2.29.0
 
 # Data processing
 pandas
 numpy
-datasets
+datasets>=5.1.0
+huggingface-hub
 pydantic
+tabulate
+openpyxl
+xlrd
 
 # Progress bars and utilities
 tqdm
@@ -22,7 +26,7 @@ Pillow
 # Web scraping and HTTP requests
 requests
 curl_cffi
-tavily
+tavily-python>=0.8.5
 
 # Date/time parsing
 python-dateutil

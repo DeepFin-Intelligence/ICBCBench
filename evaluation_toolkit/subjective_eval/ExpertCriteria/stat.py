@@ -13,12 +13,22 @@ import pandas as pd
 import glob
 import os
 import argparse
+import math
+from evaluation_toolkit.subjective_eval.runtime import validate_questions
+from evaluation_toolkit.model_clients import resolve_openrouter_model
+from evaluation_toolkit.subjective_eval.scoring.provenance import (
+    question_fingerprint, task_set_fingerprint, report_set_fingerprint, valid_fingerprint)
+from evaluation_toolkit.subjective_eval.ExpertCriteria.score_by_criteria import validate_dimension_scores
 
-def merge_multiple_jsonl_to_csv(file_list, output_csv_path, language_filter, id_to_lang_map):
+def merge_multiple_jsonl_to_csv(file_list, output_csv_path, language_filter, id_to_lang_map, expected_ids=None, question_records=None):
     """
     Read multiple jsonl files and merge all model scores into a single CSV.
     """
     all_model_data = {}  # Store model scores {model_name: {task_id: score}}
+    all_model_records = {}
+    model_names = {}
+    question_by_id = ({question['id']: question for question in validate_questions(question_records, require_question=False)}
+                      if question_records is not None else {})
     # ref_scores_map = {}  # Store reference scores {task_id: score}
     all_task_ids = set()  # Collect all task IDs that appear
 
@@ -32,9 +42,19 @@ def merge_multiple_jsonl_to_csv(file_list, output_csv_path, language_filter, id_
                         continue
 
                     entry = json.loads(line)
+                    if not isinstance(entry, dict):
+                        raise ValueError('Each expert score must be a JSON object')
+                    raw_id = entry.get('task_id')
+                    if isinstance(raw_id, bool) or not isinstance(raw_id, (str, int)) or not str(raw_id).strip():
+                        raise ValueError('Each expert score requires a nonempty task_id')
+                    entry['task_id'] = str(raw_id).strip()
+                    if expected_ids is not None and str(entry['task_id']) not in id_to_lang_map:
+                        raise ValueError(f"Unknown task ID {entry['task_id']}")
                     if language_filter:
                         # Get the language for this ID, default to "en"
-                        raw_lang = id_to_lang_map.get(str(entry['task_id']), "")
+                        if str(entry['task_id']) not in id_to_lang_map:
+                            raise ValueError(f"Unknown task ID {entry['task_id']}")
+                        raw_lang = id_to_lang_map[str(entry['task_id'])]
                         query_language = "zh" if raw_lang in ["zh", "chinese", "中文"] else "en"
 
                         # Keep only matching language
@@ -42,34 +62,53 @@ def merge_multiple_jsonl_to_csv(file_list, output_csv_path, language_filter, id_
                             continue
 
                     # Extract key information
-                    model = entry.get('model', 'Unknown')
+                    model = entry.get('model')
+                    if not isinstance(model, str) or not model.strip():
+                        raise ValueError('Each expert score requires a nonempty model name')
+                    normalized_model = resolve_openrouter_model(model.strip().lower())
+                    model_names.setdefault(normalized_model, model.strip())
                     tid = str(entry.get('task_id'))  # Convert to string to prevent type inconsistency
-                    eval_score = entry.get('total_score', 0)
+                    eval_score = entry.get('total_score')
+                    if isinstance(eval_score, bool) or not isinstance(eval_score, (int, float)) or not math.isfinite(eval_score) or not 0 <= eval_score <= 100:
+                        raise ValueError(f"Invalid expert total_score for task {tid}: {eval_score}")
+                    if 'dimensions_breakdown' in entry or valid_fingerprint(entry.get('report_fingerprint')):
+                        question = question_by_id.get(tid, {})
+                        criteria = ((question.get('expert_evaluation_criteria_en') or question.get('expert_evaluation_criteria'))
+                                    if question.get('language') == 'en' else question.get('expert_evaluation_criteria'))
+                        total = validate_dimension_scores(entry.get('dimensions_breakdown'), criteria or '')
+                        if not math.isclose(total, eval_score):
+                            raise ValueError(f'Expert total_score does not match dimension scores for task {tid}')
                     # ref_score = entry.get('ref_score', 0)
 
                     # Record task ID
                     all_task_ids.add(tid)
 
                     # Store model score
-                    if model not in all_model_data:
-                        all_model_data[model] = {}
-                    all_model_data[model][tid] = eval_score
+                    if normalized_model not in all_model_data:
+                        all_model_data[normalized_model] = {}
+                        all_model_records[normalized_model] = {}
+                    if tid in all_model_data[normalized_model]:
+                        raise ValueError(f'Duplicate expert score for model {model} task {tid}')
+                    all_model_data[normalized_model][tid] = eval_score
+                    all_model_records[normalized_model][tid] = entry
 
                     # Store/update reference score (assuming all files share the same reference standard, overwrite is fine)
                     # ref_scores_map[tid] = ref_score
 
         except Exception as e:
-            print(f"Warning: Error reading file {file_path}: {e}")
+            raise ValueError(f"Error reading score file {file_path}: {e}") from e
 
     # 2. Prepare CSV data rows
     # Sort task IDs (1, 2, 3...)
-    sorted_task_ids = sorted(list(all_task_ids), key=lambda x: int(x) if x.isdigit() else x)
+    if expected_ids is not None:
+        all_task_ids.update(expected_ids)
+    sorted_task_ids = sorted(list(all_task_ids), key=lambda x: (0, int(x)) if x.isdigit() else (1, x))
 
     rows = []
 
     # --- Add model rows ---
     for model, scores in all_model_data.items():
-        row = {'Model': model}
+        row = {'Model': model_names[model]}
         score_sum = 0
         count = 0
 
@@ -77,13 +116,32 @@ def merge_multiple_jsonl_to_csv(file_list, output_csv_path, language_filter, id_
             s = scores.get(tid, 0)  # Default to 0 if missing
             row[tid] = round(s, 2)
             score_sum += s
-            if s > 0:
+            if tid in scores:
                 count += 1
 
         # Calculate average score
         avg_score = score_sum / count if count > 0 else 0
         # row['Avg Score'] = round(avg_score * 10, 2)  # Keep two decimal places
         row['Avg Score'] = round(avg_score, 2)
+        if expected_ids is not None:
+            row['Evaluated Tasks'] = len(set(scores) & set(expected_ids))
+            row['Total Tasks'] = len(expected_ids)
+            row['Coverage (%)'] = round(row['Evaluated Tasks'] / len(expected_ids) * 100, 2) if expected_ids else 0
+        scoped_ids = set(expected_ids if expected_ids is not None else scores)
+        selected_questions = [question_by_id[tid] for tid in sorted(scoped_ids) if tid in question_by_id]
+        row['Task Set Fingerprint'] = (task_set_fingerprint(selected_questions)
+                                       if selected_questions and len(selected_questions) == len(scoped_ids) else '')
+        report_hashes = {}
+        verified = bool(selected_questions) and set(scores) == scoped_ids
+        for tid, record in all_model_records[model].items():
+            report_hash = record.get('report_fingerprint')
+            if (not valid_fingerprint(report_hash) or tid not in question_by_id
+                    or record.get('question_fingerprint') != question_fingerprint(question_by_id[tid])):
+                verified = False
+            else:
+                report_hashes[tid] = report_hash
+        row['Report Set Fingerprint'] = report_set_fingerprint(report_hashes) if verified else ''
+        row['Provenance Verified'] = verified
         rows.append(row)
 
     # # --- Add reference score row (last row) ---
@@ -106,14 +164,17 @@ def merge_multiple_jsonl_to_csv(file_list, output_csv_path, language_filter, id_
         df = pd.DataFrame(rows)
         # Adjust column order: Model, 1, 2, 3..., Avg Score
         column_order = ['Model'] + sorted_task_ids + ['Avg Score']
+        if expected_ids is not None:
+            column_order += ['Evaluated Tasks', 'Total Tasks', 'Coverage (%)']
+        column_order += ['Task Set Fingerprint', 'Report Set Fingerprint', 'Provenance Verified']
         df = df[column_order]
 
+        os.makedirs(os.path.dirname(output_csv_path) or '.', exist_ok=True)
         df.to_csv(output_csv_path, index=False, encoding='utf-8-sig')  # utf-8-sig prevents Excel garbled Chinese characters
         print(f"\nSuccess! Merged data from {len(rows)} models into: {output_csv_path}")
         return df
     else:
-        print("No data extracted.")
-        return None
+        raise ValueError("No valid scores match the requested language")
 
 
 # ==========================================
@@ -125,11 +186,14 @@ def stat(input_dir, query_file, output_csv_path, language_filter=None):
 
     with open(query_file, "r", encoding="utf-8") as f:
         query_data = json.load(f)
+    query_data = validate_questions(query_data, require_question=False)
 
     id_to_lang = {
         str(item["id"]): item.get("language", "").lower()
         for item in query_data
     }
+    expected_ids = {task_id for task_id, language in id_to_lang.items()
+                    if language_filter is None or ("zh" if language in ["zh", "chinese", "中文"] else "en") == language_filter}
 
     if language_filter:
         base, ext = os.path.splitext(output_csv_path)
@@ -137,9 +201,16 @@ def stat(input_dir, query_file, output_csv_path, language_filter=None):
 
     if jsonl_files:
         print(f"Found files: {jsonl_files}")
-        merge_multiple_jsonl_to_csv(jsonl_files, output_csv_path, language_filter, id_to_lang)
+        frame = merge_multiple_jsonl_to_csv(jsonl_files, output_csv_path, language_filter, id_to_lang, expected_ids, query_data)
+        if frame['Coverage (%)'].lt(100).any():
+            print("Expert leaderboard is incomplete; see Evaluated Tasks, Total Tasks, and Coverage (%).")
+            return 1
+        if not frame['Provenance Verified'].all():
+            print('Expert leaderboard has unverified provenance; regenerate scores with the current toolkit before final aggregation.')
+            return 1
+        return 0
     else:
-        print("No .jsonl files found in the current directory")
+        raise FileNotFoundError(f"No .jsonl score files found in {input_dir}")
 
 
 if __name__ == '__main__':
@@ -155,4 +226,4 @@ if __name__ == '__main__':
     parser.add_argument("--language_filter", type=str, default=None, choices=["zh", "en"], help="Language filter")
     args = parser.parse_args()
 
-    stat(args.input_dir, args.query_file, args.output_csv, args.language_filter)
+    sys.exit(stat(args.input_dir, args.query_file, args.output_csv, args.language_filter))

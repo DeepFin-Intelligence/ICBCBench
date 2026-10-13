@@ -34,28 +34,20 @@ def safe_json_loads(text: str):
         except json.JSONDecodeError:
             pass
 
-    # 3. 尝试暴力提取大括号 {...} 或中括号 [...] 内的内容
-    # 寻找第一个左括号和最后一个对应的右括号
-    dict_start, dict_end = text.find('{'), text.rfind('}')
-    list_start, list_end = text.find('['), text.rfind(']')
-
-    # 判断是最外层是字典还是列表
-    if dict_start != -1 and dict_end != -1 and dict_end > dict_start:
-        dict_text = text[dict_start:dict_end + 1]
+    # 按出现顺序解析完整容器，避免把数组中的单个对象误当成整个结果。
+    # raw_decode 同时正确处理字符串里的括号和 JSON 之后的说明文字。
+    decoder = json.JSONDecoder()
+    # 遇到明显的 JSON 容器后，截断或语法错误必须失败；不能降级为其内部对象。
+    candidate = re.search(r'\[(?=\s*(?:[\[{"\d\]-]|true\b|false\b|null\b))|\{(?=\s*(?:"|}))', text)
+    if candidate:
         try:
-            return json.loads(dict_text)
-        except json.JSONDecodeError:
-            pass
-
-    if list_start != -1 and list_end != -1 and list_end > list_start:
-        list_text = text[list_start:list_end + 1]
-        try:
-            return json.loads(list_text)
+            result, _ = decoder.raw_decode(text, candidate.start())
+            return result
         except json.JSONDecodeError:
             pass
 
     # 4. 如果所有尝试都失败了，抛出异常或返回 None（这里选择记录日志并返回 None）
-    print(f"[Warning] Failed to safely parse JSON. Raw text snippet: \n{text}...")
+    print(f"[Warning] Failed to safely parse JSON. Raw text snippet: \n{text[:500]}...")
     return None
 
 def load_local_dataset(file_path: str):
@@ -65,31 +57,21 @@ def load_local_dataset(file_path: str):
     with open(file_path, "r", encoding="utf-8") as f:
         local_data = json.load(f)
 
-    # 转换为与 HuggingFace dataset 相同的格式
-    dataset = {}
-    # 假设 JSON 文件是一个包含所有字段的字典列表
     if isinstance(local_data, list):
-        # 如果是列表格式 [{}, {}, ...]
-        # 获取所有键并确保每个项目都包含这些键
-        all_keys = set()
-        for item in local_data:
-            all_keys.update(item.keys())
-        
-        # 为每个项目添加缺失的键并设置默认值None
-        for item in local_data:
-            for key in all_keys:
-                if key not in item:
-                    item[key] = None
-        
-        dataset = {
-            key: [item[key] for item in local_data]
-            for key in local_data[0].keys()
-        }
-    else:
-        # 如果是字典格式 {"field1": [...], "field2": [...]}
-        dataset = local_data
-
-    return dataset
+        if not all(isinstance(item, dict) for item in local_data):
+            raise ValueError("Dataset rows must be JSON objects")
+        # 保持列顺序一致；缺失的可选字段为 None，空数据集返回空列映射。
+        all_keys = dict.fromkeys(key for item in local_data for key in item)
+        return {key: [item.get(key) for item in local_data] for key in all_keys}
+    if isinstance(local_data, dict):
+        # 列式数据集以及 FACT 使用的 id -> report 映射都可读取。
+        if any(isinstance(value, list) for value in local_data.values()):
+            if not all(isinstance(value, list) for value in local_data.values()):
+                raise ValueError("Dataset columns must all be lists")
+            if len({len(value) for value in local_data.values()}) > 1:
+                raise ValueError("Dataset columns must have equal lengths")
+        return local_data
+    raise ValueError("Dataset must be a JSON array or object")
 
 
 def fix_pdf_newlines(text):

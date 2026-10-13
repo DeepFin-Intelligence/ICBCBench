@@ -18,5 +18,21 @@ __all__ = [
     "GeminiDeepResearch",
     "TavilyDeepResearch",
     "OpenaiDeepResearch",
-    "QwenDeepResearch"
+    "QwenDeepResearch", "create_dr_client"
 ]
+
+
+def create_dr_client(model):
+    """Instantiate only the provider selected by the caller."""
+    factories = {
+        "gemini-deep-research": GeminiDeepResearch,
+        "tongyi-deepresearch-30b-a3b": TongyiDeepResearch,
+        "tongyi-deep-research": TongyiDeepResearch,
+        "Qwen-deep-research": QwenDeepResearch,
+        "qwen-deep-research": QwenDeepResearch,
+        "tavily-research": TavilyDeepResearch,
+        "o4-mini-deep-research": lambda: OpenaiDeepResearch(model_choose=model),
+        "o3-deep-research": lambda: OpenaiDeepResearch(model_choose=model),
+    }
+    factory = factories.get(model)
+    return factory() if factory else None

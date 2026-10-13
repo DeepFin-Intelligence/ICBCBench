@@ -16,12 +16,12 @@ import re
 from functools import partial
 from evaluation_toolkit.utils import load_local_dataset
 from evaluation_toolkit.model_clients import *
-from pydantic import BaseModel
-from typing import Literal
+from evaluation_toolkit.subjective_eval.FACT.utils import load_jsonl, write_jsonl, records_by_id, validate_citations
+from evaluation_toolkit.subjective_eval.runtime import validate_questions
+from evaluation_toolkit.subjective_eval.scoring.provenance import question_fingerprint, report_fingerprint
 
-load_dotenv()
 
-client = DMX
+client = OPENROUTER
 
 
 prompt_template = """你会看到一篇研究报告，研究报告正文中会有一些对参考文献的引用。
@@ -63,7 +63,7 @@ Citations in the main text may appear in the following forms:
 Please identify **all** instances where references are cited in the main text, and extract (fact, ref_idx, url) triplets. When extracting, pay attention to the following:
 1. Since these facts will need to be verified later, you may need to look for some context before and after the citation to ensure that the fact is complete and understandable, rather than just a simple phrase or short expression.
 2. If a fact cites multiple references, then it should correspond to two triplets: (fact, ref_idx_1, url_1) and (fact, ref_idx_2, url_2).
-3. For the third form of citation (i.e., where the citation source and link appear directly in the text), the ref_idx should be uniformly set to 0.
+3. For the fourth form of citation (i.e., where the citation source and link appear directly in the text), the ref_idx should be uniformly set to 0.
 4. If the main text does not specify the exact location of the citation (for example, only the reference list is listed at the end of the article, without specifying the citation point in the text), please return an empty list.
 
 You should return a JSON list format, where each item in the list is a triplet, for example:
@@ -79,12 +79,6 @@ Here is the main text of the research report:
 {report_text}
 
 Please begin the extraction now. Output only the JSON list directly, without any chitchat or explanations."""
-
-class ExtractedCitation(BaseModel):
-    fact: str
-    ref_idx: int
-    url: str
-    strict: Literal[True]
 
 def clean_urls(input_text):
     # match [title](url) format
@@ -118,173 +112,131 @@ def clean_escape(input_text):
     return input_text
 
 def safe_json_parse(response_text):
-    """安全解析可能截断的JSON响应"""
+    """Reject incomplete JSON rather than silently dropping citations."""
+    return json.loads(response_text)
+
+
+def extract_report(d, id_to_lang_map, judge_model="google/gemini-3-flash-preview"):
+    d = dict(d)
+    article_id = str(d.get('id', ''))
+    d['id'] = article_id
+    d['extraction_model'] = resolve_openrouter_model(judge_model)
+    error = None
     try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        # 尝试修复截断的JSON
-        # 查找最后一个完整的JSON对象结束位置
-        print("\nJSON 解析失败，尝试修复截断的JSON")
-        for i in range(len(response_text), 0, -1):
-            try:
-                partial_json = response_text[:i].rstrip(', \n\r')
-                if partial_json.endswith('}'):
-                    return json.loads(partial_json + ']')
-            except:
-                continue
-        raise ValueError("无法解析JSON响应")
-
-
-def run(data, output_path, id_to_lang_map):
-    for i, d in enumerate(data):
-        # Determine the language based on the id in the query data
-        article_id = d.get('id')
-
-        if not article_id:
-            print(f"Article has no ID field, skipping extraction")
-            continue
-            
-        if article_id not in id_to_lang_map:
-            print(f"Language not found for article ID: {article_id}")
-            continue
-            
-        lang = id_to_lang_map[article_id]
-        if lang not in ["zh", "en"]:
-            print(f"Unsupported language: {lang} for article ID: {article_id}")
-            continue
-            
-        # Select the prompt based on the language
-        if lang == "zh":
-            user_prompt = prompt_template.format(report_text=d['response'])
-        elif lang == 'en':
-            user_prompt = prompt_template_en.format(report_text=d['response'])
-
-        # for example
-        # user_prompt = prompt_template.format(report_text="")
-
-        # Call LLM with retry protection
-        retries = 0
-        llm_response = None
-        while retries < 3:
-            retries += 1
+        language = id_to_lang_map[article_id]
+        if language not in ('zh', 'en'):
+            raise ValueError(f"Unsupported language: {language}")
+        if not isinstance(d.get('response'), str) or not d['response'].strip():
+            raise ValueError('Report response is empty')
+        if d.get('citation_mapping_error'):
+            raise ValueError(d['citation_mapping_error'])
+        template = prompt_template if language == 'zh' else prompt_template_en
+        user_prompt = template.format(report_text=d['response'])
+        for attempt in range(3):
             try:
                 response = client.chat.completions.create(
-                    model="gemini-3-flash-preview",
-                    messages=[{"role": "user", "content": user_prompt}],
-                    response_format={'type': 'json_object'},
-                    max_tokens=65536
-                )
-                llm_response = response.choices[0].message.content
-                break
-            except Exception as e:
-                print(f"[API Error] article ID: {article_id}, retry {retries}/3: {repr(e)}")
-                if retries >= 3:
-                    llm_response = None
-                continue
-        
-        # Parse LLM response with retry protection
-        parse_retries = 0
-        while parse_retries < 3:
-            parse_retries += 1
-            try:
-                if llm_response and llm_response != "":
-                    response_text = llm_response.replace("```json", "").replace("```", "")
-                    response_text = clean_escape(response_text)
-                    
-                    d['citations'] = safe_json_parse(response_text)
+                    model=resolve_openrouter_model(judge_model),
+                    messages=[{"role": "user", "content": user_prompt}], max_tokens=65536)
+                if getattr(response.choices[0], 'finish_reason', None) in ('length', 'content_filter'):
+                    raise ValueError('Extraction response did not finish normally')
+                text = response.choices[0].message.content
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError('Empty extraction response')
+                # Partial/truncated JSON must never silently become complete output.
+                citations = validate_citations(json.loads(clean_escape(text.replace('```json', '').replace('```', ''))))
+                for citation in citations:
+                    citation['fact'] = remove_urls(citation['fact'])
+                d['citations'] = citations
+                d.pop('extraction_error', None)
+                return d, 0
+            except Exception as exc:
+                error = str(exc)
+                print(f"Extraction error for {article_id}, attempt {attempt + 1}/3: {exc}")
+    except Exception as exc:
+        error = str(exc)
+    d['citations'] = 'extraction failed'
+    d['extraction_error'] = error
+    return d, 1
 
-                    for c in d['citations']:
-                        c['fact'] = remove_urls(c['fact'])
 
-                else:
-                    d['citations'] = "extraction failed"
-
-                break
-            except Exception as e:
-                print(f"[Parse Error] article ID: {article_id}, retry {parse_retries}/3: {repr(e)}")
-                if parse_retries >= 3:
-                    d['citations'] = "extraction failed"
-                continue
-        
-        # Always write the result (success or failure)
-        with open(output_path, "a+", encoding='utf-8') as f:
-            f.write(json.dumps(d, ensure_ascii=False) + "\n")
-
-        if d.get('citations') == "extraction failed":
-            print(f">>>>>>>>>> extraction failed for article ID: {article_id}")
-        else:
-            print(f">>>>>>>>>> generating {d['id']}-th instance...")
+def run(data, output_path, id_to_lang_map, judge_model="google/gemini-3-flash-preview"):
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    failed = 0
+    with open(output_path, 'a', encoding='utf-8') as handle:
+        for item in data:
+            record, error = extract_report(item, id_to_lang_map, judge_model)
+            failed += error
+            handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+            handle.flush()
+    return failed
 
 
 if __name__ == '__main__':
-
-    # multiprocessing.set_start_method('fork')
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_path", type=str, required=True)
-    parser.add_argument("--raw_data_path", type=str, required=True)
-    parser.add_argument("--query_data_path", type=str, required=True, help="Path to query data with language information")
-    parser.add_argument("--n_total_process", type=int, default=1)
+    parser.add_argument('--output_path', required=True)
+    parser.add_argument('--raw_data_path', required=True)
+    parser.add_argument('--query_data_path', required=True)
+    parser.add_argument('--n_total_process', type=int, default=1)
+    parser.add_argument('--judge', default='google/gemini-3-flash-preview')
     args = parser.parse_args()
-
-    output_path = args.output_path
-    
-    # Load the query data to get language information
+    if args.n_total_process < 1:
+        parser.error('--n_total_process must be at least 1')
     query_data = load_local_dataset(args.query_data_path)
-    query_data = [dict(zip(query_data.keys(), values)) for values in zip(*query_data.values())]
-
-    # Create a mapping from ID to language
-    id_to_lang_map = {item['id']: item['language'] for item in query_data if 'id' in item}
-
+    queries = validate_questions([dict(zip(query_data.keys(), row)) for row in zip(*query_data.values())], require_question=False)
+    id_to_lang_map = {str(item['id']): item['language'] for item in queries}
+    question_map = {item['id']: item for item in queries}
     if not id_to_lang_map:
-        raise ValueError("No valid language information found in query data")
-    
-    # Load the raw data
-    raw_data_dict = load_local_dataset(args.raw_data_path)
-
-    # 转换为列表格式
+        raise ValueError('No valid language information found in query data')
     raw_data = []
-    for key, value in raw_data_dict.items():
-        # 将key作为id字段添加到值中
-        item = value.copy()  # 复制原值
-        item['id'] = key  # 添加id字段
-        raw_data.append(item)
-
-    # If the output file exists, load the processed ids and filter out the processed instances
-    # NOTE: ids with 'extraction failed' will be re-processed to allow retry
-    if os.path.exists(output_path):
-        with open(output_path, "r", encoding='utf-8') as f:
-            predictions = [json.loads(line) for line in f.readlines()]
-
-        processed = [d['id'] for d in predictions if d.get('citations') != 'extraction failed']
-        failed_ids = [d['id'] for d in predictions if d.get('citations') == 'extraction failed']
-        if failed_ids:
-            print(f"Found {len(failed_ids)} failed extraction(s), will retry: {failed_ids}")
-            # Rewrite extracted.jsonl without failed entries
-            with open(output_path, 'w', encoding='utf-8') as f:
-                for d in predictions:
-                    if d.get('citations') != 'extraction failed':
-                        f.write(json.dumps(d, ensure_ascii=False) + '\n')
-
-        data_to_process = [d for d in raw_data if d['id'] not in processed]
-    else:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        data_to_process = raw_data
-
-    # OpenAI deep research will add webpage snippets to the citations.
-    # For fair comparison, we remove these snippets
+    for key, value in load_local_dataset(args.raw_data_path).items():
+        raw_data.append(dict(value, id=str(key)))
+    present = {item['id'] for item in raw_data}
+    missing = set(id_to_lang_map) - present
+    print(f'FACT input coverage: {len(present & set(id_to_lang_map))}/{len(id_to_lang_map)} reports; {len(missing)} missing.')
+    raw_data.extend({'id': identifier, 'response': None} for identifier in sorted(missing))
+    for item in raw_data:
+        if item['id'] in question_map:
+            item['question_fingerprint'] = question_fingerprint(question_map[item['id']])
+        try:
+            item['report_fingerprint'] = report_fingerprint(item['id'], item)
+        except ValueError:
+            item.pop('report_fingerprint', None)
     if 'openai' in args.raw_data_path:
-        for d in data_to_process:
-            d['article'] = clean_urls(d['article'])
-
-    print(f"Processing {len(data_to_process)} instances...")
-
-    n_total_process = args.n_total_process
-    if n_total_process == 1:
-        run(data_to_process, output_path, id_to_lang_map)
-    elif n_total_process > 1:
-        part_size = (len(data_to_process) + n_total_process - 1) // n_total_process
-        data_splits = [data_to_process[i * part_size : (i + 1) * part_size] for i in range(n_total_process)]
-        run_partial = partial(run, output_path=output_path, id_to_lang_map=id_to_lang_map)
-        with multiprocessing.Pool(processes=n_total_process) as pool:
-            results = pool.map(run_partial, data_splits)
+        for item in raw_data:
+            if isinstance(item.get('response'), str):
+                item['response'] = clean_urls(item['response'])
+    existing = records_by_id(load_jsonl(args.output_path)) if os.path.exists(args.output_path) else {}
+    successful = {}
+    for item in raw_data:
+        previous = existing.get(item['id'])
+        if (previous and previous.get('response') == item.get('response')
+                and previous.get('question_fingerprint') == item.get('question_fingerprint')
+                and previous.get('report_fingerprint') == item.get('report_fingerprint')
+                and all(previous.get(key) == item.get(key) for key in
+                        ('provider_citations', 'provider_raw_citations', 'citation_mapping_error'))
+                and previous.get('extraction_model') == resolve_openrouter_model(args.judge)):
+            try:
+                validate_citations(previous.get('citations'))
+                successful[item['id']] = previous
+            except ValueError:
+                pass
+    write_jsonl(args.output_path, successful.values())
+    pending = [item for item in raw_data if item['id'] not in successful]
+    print(f'Processing {len(pending)} reports...')
+    worker = partial(extract_report, id_to_lang_map=id_to_lang_map, judge_model=args.judge)
+    failed = 0
+    # Workers return data; only the parent writes the shared JSONL checkpoint.
+    pool = multiprocessing.Pool(args.n_total_process) if args.n_total_process > 1 else None
+    try:
+        results = pool.imap(worker, pending) if pool else map(worker, pending)
+        for record, error in results:
+            failed += error
+            successful[record['id']] = record
+            write_jsonl(args.output_path, successful.values())
+    finally:
+        if pool:
+            pool.close()
+            pool.join()
+    if failed:
+        print(f'Citation extraction incomplete: {failed} report(s) failed; rerun to retry.')
+    sys.exit(1 if failed else 0)

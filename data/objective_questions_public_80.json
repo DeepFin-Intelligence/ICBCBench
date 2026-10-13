@@ -250,7 +250,7 @@
   },
   {
     "id": "25",
-    "question": "You are currently the chief analyst responsible for G-SIB bank capital modeling at an institution.\nOn 18 December 2025, BNP Paribas announced that exclusive negotiations are ongoing between BNPP (owner of Arval) and Mercedes-Benz Group for the acquisition of a 100% stake in Athlon, a vehicle leasing company with a fleet of c.0.4 million vehicles across 20 countries; the acquisition is expected to complete in 2026. The transaction is expected to have a negative impact of approximately 13 basis points (bps) on the Group's CET1 ratio, which stood at 12.5% as of Q3 2025. To quantify the precise capital consumption of this deal, you first need to establish the Group's total Risk-Weighted Assets base.\nBased on BNP Paribas' 3Q25 performance appendices and related charts (see the two attached figures: the CIB 9M25 Dashboard, which discloses the CIB division's end-of-period RWA, and the divisional breakdown chart, which shows CIB's percentage share of Group RWA), calculate the implied total Risk-Weighted Assets (Total RWA) of BNP Paribas as of the end of the third quarter of 2025 (unit: billion euros; retain two decimal places).",
+    "question": "You are currently the chief analyst responsible for G-SIB bank capital modeling at an institution.\nOn 18 December 2025, BNP Paribas announced that exclusive negotiations are ongoing between BNPP (owner of Arval) and Mercedes-Benz Group for the acquisition of a 100% stake in Athlon, a vehicle leasing company with a fleet of c.0.4 million vehicles across 20 countries; the acquisition is expected to complete in 2026. The transaction is expected to have a negative impact of approximately 13 basis points (bps) on the Group's CET1 ratio, which stood at 12.5% as of Q3 2025. To quantify the precise capital consumption of this deal, you first need to establish the Group's total Risk-Weighted Assets base.\nBased on BNP Paribas' 3Q25 performance appendices and related charts (see the two figures referenced below: the CIB 9M25 Dashboard, which discloses the CIB division's end-of-period RWA, and the divisional breakdown of Group RWA, which shows CIB's percentage share of Group RWA), calculate the implied total Risk-Weighted Assets (Total RWA) of BNP Paribas as of the end of the third quarter of 2025 (unit: billion euros; retain two decimal places).\n\nSource figures (PDF page numbers are 1-based):\n1. CIB | 9M25 Dashboard: https://invest.bnpparibas/document/3q25-appendices#page=8 (PDF page 8; printed page 44).\n2. Divisional breakdown of Group RWA: https://invest.bnpparibas/document/raising-the-bar-targeting-13-cet1-ratio-in-2027#page=6 (PDF page 6; printed page 6).\nThe figures are referenced at their official sources and are not bundled with the dataset.",
     "answer": "754.71",
     "classification": "Banking-Risk Management",
     "classification_code": "BNK-RSK",
@@ -258,14 +258,18 @@
     "language": "en",
     "attachment": [
       {
-        "original_filename": "CIB.png",
-        "mime_type": "image/png",
-        "file_path": "attachments/en_25_CIB.png"
+        "source_url": "https://invest.bnpparibas/document/3q25-appendices",
+        "mime_type": "application/pdf",
+        "pdf_page": 8,
+        "printed_page": 44,
+        "description": "CIB | 9M25 Dashboard"
       },
       {
-        "original_filename": "CIB占比.png",
-        "mime_type": "image/png",
-        "file_path": "attachments/en_25_CIB占比.png"
+        "source_url": "https://invest.bnpparibas/document/raising-the-bar-targeting-13-cet1-ratio-in-2027",
+        "mime_type": "application/pdf",
+        "pdf_page": 6,
+        "printed_page": 6,
+        "description": "Divisional breakdown of Group RWA"
       }
     ]
   },

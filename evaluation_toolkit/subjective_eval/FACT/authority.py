@@ -83,31 +83,11 @@ def get_authority_weight(url):
     """
     Parse URL and return authority weight for the specific domain.
     """
-    COMPLEX_SUFFIXES = {'com', 'org', 'net', 'gov', 'edu', 'co', 'ac', 'mil'}
-
     try:
         parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-
-        # 1. Clean domain (remove www. or other common secondary prefixes for main domain matching)
-        # For financial domains like finance.yahoo.com, extract the root domain for matching
-        parts = domain.split('.')
-        # Scenario 1: Domains with double suffixes (e.g., pbc.gov.cn, finance.sina.com.cn, a.b.hkex.com.hk)
-        # At least 3 parts, and the second-to-last part is in the double-suffix list
-        if len(parts) >= 3 and parts[-2] in COMPLEX_SUFFIXES:
-            root_domain = f"{parts[-3]}.{parts[-2]}.{parts[-1]}"
-
-        # Scenario 2: Normal single-suffix domains (e.g., szse.cn, bloomberg.com, finance.yahoo.com)
-        # At least 2 parts, and the second-to-last part is not a special double suffix
-        elif len(parts) >= 2 and parts[-2] not in COMPLEX_SUFFIXES:
-            root_domain = f"{parts[-2]}.{parts[-1]}"
-
-        # Scenario 3: Fallback edge cases (e.g., localhost, or input like com.cn itself)
-        else:
-            root_domain = domain[4:] if domain.startswith("www.") else domain
-
-        domain_to_check = root_domain
-        # print(f"[Info] Checking authority weight for {domain_to_check}...")
+        domain = (parsed.hostname or '').lower().rstrip('.')
+        if not domain:
+            return AUTHORITY_CONFIG.get('default_weight', 0.5)
 
         # 2. Determine Tier 1 (suffix match - e.g., sec.gov, pbc.gov.cn)
         # Note: AUTHORITY_CONFIG["high_trust_suffixes"] must be converted to tuple for endswith
@@ -115,15 +95,18 @@ def get_authority_weight(url):
             return 1.0
 
         # 3. Determine Tier 1 (exact match with top authority domains)
-        if domain_to_check in AUTHORITY_CONFIG.get("high_trust_domains", []):
+        if any(domain == candidate or domain.endswith('.' + candidate)
+               for candidate in AUTHORITY_CONFIG.get("high_trust_domains", [])):
             return 1.0
 
         # 4. Determine Tier 2 (high-quality/institutional research)
-        if domain_to_check in AUTHORITY_CONFIG.get("medium_high_trust_domains", []):
+        if any(domain == candidate or domain.endswith('.' + candidate)
+               for candidate in AUTHORITY_CONFIG.get("medium_high_trust_domains", [])):
             return 0.85  # or 0.9
 
         # 5. Determine Tier 3 (mass media/UGC/PR articles)
-        if domain_to_check in AUTHORITY_CONFIG.get("medium_trust_domains", []):
+        if any(domain == candidate or domain.endswith('.' + candidate)
+               for candidate in AUTHORITY_CONFIG.get("medium_trust_domains", [])):
             return 0.7  # Previously 0.8, reduced for rigorous financial research
 
         # 6. Default Tier 4

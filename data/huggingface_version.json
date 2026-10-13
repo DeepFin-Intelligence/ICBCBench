@@ -1,0 +1,91 @@
+{
+  "repo_id": "DeepFin-Intelligence/ICBCBench",
+  "source_revision": "c1cbb5ed75daf6225035dbd89737aef1da86557f",
+  "source_last_modified": "2026-09-14T03:11:44+00:00",
+  "source_synced_on": "2026-10-08",
+  "prepared_on": "2026-10-13",
+  "release_id": "url-references-2026-10-13",
+  "status": "github_branch_hf_unpublished",
+  "configs": {
+    "objective_questions": {
+      "split": "train",
+      "rows": 80
+    },
+    "subjective_questions": {
+      "split": "train",
+      "rows": 40
+    }
+  },
+  "changes": [
+    "Objective task 25: replace two bundled BNP Paribas image attachments with official PDF source URLs and 1-based page locators; retain reference answer 754.71.",
+    "Evaluation renders referenced PDF pages in memory when image input is supported; text-only research interfaces receive source references.",
+    "Clarify Apache-2.0 licensing of benchmark-authored data and exclusion of third-party source materials."
+  ],
+  "source_files": [
+    {
+      "path": "data/attachments/en_25_CIB.png",
+      "size": 163080,
+      "sha256": "23c2dbf081be5b0d68bb6fd325d2b53a4ea5041725ea221425588171165ff4d3"
+    },
+    {
+      "path": "data/attachments/en_25_CIB占比.png",
+      "size": 165651,
+      "sha256": "31f5c75889df912511301f1e6acd3a4fedfb1d94ddd083757f05ec40182a4374"
+    },
+    {
+      "path": "data/objective_questions_public_80.json",
+      "size": 103902,
+      "sha256": "d8c0e465fc38cc8c9c0c91d2e02c6eaf22ee07b8c79d94da5b9d3b7794e74dcb"
+    },
+    {
+      "path": "data/subjective_questions_public_40.json",
+      "size": 386289,
+      "sha256": "1d630d72d1bb4b7ba5cbc050cb4c224a76396e0b5c39c499897e87f411e36897"
+    }
+  ],
+  "files": [
+    {
+      "path": "data/DATA_LICENSE.md",
+      "size": 1735,
+      "sha256": "1874ae7caeb84a417155176e6eaf5ccbb910b6367b23a34eac6b765400474b5a"
+    },
+    {
+      "path": "data/LICENSE",
+      "size": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "data/THIRD_PARTY_SOURCES.md",
+      "size": 1962,
+      "sha256": "8876286217200571add6c19912762fd62c60881caa2ab14729b6d837821714a5"
+    },
+    {
+      "path": "data/objective_questions_public_80.json",
+      "size": 104545,
+      "sha256": "f40f8299b971c8f754271d3f40b4e0887ad00f249b25104a8c2d35e45801ef99"
+    },
+    {
+      "path": "data/subjective_questions_public_40.json",
+      "size": 386289,
+      "sha256": "1d630d72d1bb4b7ba5cbc050cb4c224a76396e0b5c39c499897e87f411e36897"
+    }
+  ],
+  "external_sources": [
+    {
+      "source_url": "https://invest.bnpparibas/document/3q25-appendices",
+      "mime_type": "application/pdf",
+      "pdf_page": 8,
+      "printed_page": 44,
+      "description": "CIB | 9M25 Dashboard"
+    },
+    {
+      "source_url": "https://invest.bnpparibas/document/raising-the-bar-targeting-13-cet1-ratio-in-2027",
+      "mime_type": "application/pdf",
+      "pdf_page": 6,
+      "printed_page": 6,
+      "description": "Divisional breakdown of Group RWA"
+    }
+  ],
+  "github_repository": "DeepFin-Intelligence/ICBCBench",
+  "git_branch": "Zhiwei"
+}

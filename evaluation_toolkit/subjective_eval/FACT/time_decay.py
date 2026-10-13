@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+_root = Path(__file__).resolve().parents[3]
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 import json
 import argparse
 import math
@@ -19,6 +26,8 @@ def calculate_time_score(publish_time_str, alpha=0.002):
     Unit: days
     """
     # 1. If no publication time, return None or default score
+    if not math.isfinite(alpha) or alpha < 0:
+        raise ValueError('alpha must be a finite nonnegative number')
     if not publish_time_str:
         return -1
 
@@ -74,38 +83,21 @@ def process_citation_time(citation_item, alpha):
 # ==========================================
 
 
+def save_time_score(data_list, save_path, alpha):
+    if not math.isfinite(alpha) or alpha < 0:
+        raise ValueError('alpha must be a finite nonnegative number')
+    print(f"Processing {len(data_list)} documents for time decay evaluation...")
+    for record in tqdm(data_list):
+        for citation in record.get('citations_deduped', {}).values():
+            citation['time_decay_score'] = calculate_time_score(citation.get('publish_time'), alpha)
+    write_jsonl(save_path, data_list)
+    print(f"Done! Results saved to {save_path}")
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_path", type=str, required=True, help="Path to raw data or validated data")
-    parser.add_argument("--output_path", type=str, required=True, help="Path to save data with time scores_dynamic")
-    parser.add_argument("--alpha", type=float, default=0.002,
-                        help="Decay rate alpha. Default 0.002 (approx 1 year half-life)")
-
+    parser.add_argument("--input_path", required=True, help="Raw or validated JSONL file")
+    parser.add_argument("--output_path", required=True, help="Output JSONL with time scores")
+    parser.add_argument("--alpha", type=float, default=0.002, help="Decay rate per day")
     args = parser.parse_args()
-
-
-def save_time_score(data_list, save_path, alpha):
-
-    if os.path.exists(save_path):
-        os.remove(save_path)
-
-    print(f"Processing {len(data_list)} documents for time decay evaluation...")
-
-    for d in tqdm(data_list):
-        # Get all citations
-        citations = d.get('citations_deduped', {})
-
-        # Iterate over each citation URL
-        for url, content in citations.items():
-            # Calculate score
-            score = calculate_time_score(content.get('publish_time'), alpha)
-
-            # Write score directly into original data structure
-            # Result stored in citations_deduped[url]['time_decay_score']
-            content['time_decay_score'] = score
-
-        with open(save_path, 'a+', encoding='utf-8') as f_out:
-            # Write to file
-            f_out.write(json.dumps(d, ensure_ascii=False) + "\n")
-
-    print(f"Done! Results saved to {save_path}")
+    save_time_score(load_jsonl(args.input_path), args.output_path, args.alpha)

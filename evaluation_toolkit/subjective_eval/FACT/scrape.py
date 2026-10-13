@@ -14,137 +14,92 @@ import time
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
-from evaluation_toolkit.subjective_eval.FACT.utils import load_jsonl, scrape_url
+from evaluation_toolkit.subjective_eval.FACT.utils import load_jsonl, scrape_url, write_jsonl, records_by_id, validation_cache_matches
 from evaluation_toolkit.utils import load_local_dataset
 from evaluation_toolkit.model_clients import *
 
-load_dotenv()
 
 def scrape(citation_url):
-    max_retries = 3
-    retries = 0
-    while retries < max_retries:
-        result = scrape_url(citation_url)
-        retries += 1
-        if 'error' in result:
-            wait_time = 2 ** retries  # 指数退避: 2s, 4s, 8s
-            print(f"scrape failed for {citation_url}, retrying in {wait_time}s... (attempt {retries}/{max_retries})")
-            time.sleep(wait_time)
-        else:
+    result = {'error': 'No scrape attempt completed'}
+    for attempt in range(3):
+        try:
+            result = scrape_url(citation_url)
+        except Exception as exc:
+            result = {'error': str(exc)}
+        if 'error' not in result and isinstance(result.get('content'), str) and result['content'].strip():
             break
+        result.setdefault('error', 'Reference content is empty')
+        if attempt < 2:
+            time.sleep(2 ** (attempt + 1))
+    if 'error' in result:
+        return {'url': citation_url, 'true_url': citation_url,
+                'url_content': f'scrape failed: {result["error"]}',
+                'publish_time': 'unknown', 'scrape_error': result['error']}
+    return {'url': citation_url, 'true_url': result.get('url', citation_url),
+            'url_content': '\n\n'.join(result.get(key, '') or '' for key in ('title', 'description', 'content')),
+            'publish_time': result.get('publish_time') or 'unknown', 'scrape_error': None}
 
-    url_content = None
-    if 'error' not in result:
-        true_url = result.get('url', citation_url)
-        title = result.get('title', '')
-        content = result.get('content', '')
-        description = result.get('description', '')
-        publish_time = result.get('publish_time', 'unknown')
 
-        url_content = f"{title}\n\n{description}\n\n{content}"
-    else:
-        url_content = f"scrape failed: {result.get('error', 'unknown error')}"
-        publish_time = 'unknown'
-        true_url = citation_url
-    # print(f"url_content: {url_content}")
-    return {
-        'url': citation_url,
-        'true_url': true_url,
-        'url_content': url_content,
-        'publish_time': publish_time
-    }
+def needs_scrape(citation):
+    content = citation.get('url_content')
+    return not isinstance(content, str) or not content.strip() or content.startswith('scrape failed') or bool(citation.get('scrape_error'))
+
+
+def merge_scrape_cache(raw_data, existing_docs):
+    for record in raw_data:
+        previous = existing_docs.get(str(record['id']), {})
+        for url, citation in record.get('citations_deduped', {}).items():
+            cached = previous.get('citations_deduped', {}).get(url, {})
+            if not needs_scrape(cached) and needs_scrape(citation):
+                # Keep current facts and validation; reuse only fetched source fields.
+                for field in ('url_content', 'true_url', 'publish_time', 'scrape_error'):
+                    if field in cached:
+                        citation[field] = cached[field]
+                if citation.get('facts') == cached.get('facts') and validation_cache_matches(citation, cached):
+                    citation['validate_res'] = cached['validate_res']
+                    citation['validate_error'] = None
+                    if cached.get('validation_model'):
+                        citation['validation_model'] = cached['validation_model']
+                else:
+                    citation.pop('validate_res', None)
+                    citation.pop('validate_error', None)
+                    citation.pop('validation_model', None)
+    return raw_data
 
 
 if __name__ == '__main__':
-    # if platform.system() == 'Darwin':
-    #     try:
-    #         multiprocessing.set_start_method('spawn')
-    #     except RuntimeError:
-    #         pass
-    # else:
-    #     try:
-    #         multiprocessing.set_start_method('fork')
-    #     except RuntimeError:
-    #         pass
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_path", type=str, required=True)
-    parser.add_argument("--raw_data_path", type=str, required=True)
-    parser.add_argument("--n_total_process", type=int, default=1)
+    parser.add_argument('--output_path', required=True)
+    parser.add_argument('--raw_data_path', required=True)
+    parser.add_argument('--n_total_process', type=int, default=1)
     args = parser.parse_args()
-    
-    output_path = args.output_path
-    
-    # initialize variables
-    raw_data = []
-    data_to_process = []
-    processed = []
-    
-    try:
-        raw_data = load_jsonl(args.raw_data_path)
-        
-        # URL-level resume: merge existing scraped data
-        existing_docs = {}
-        if os.path.exists(output_path):
-            for d in load_jsonl(output_path):
-                existing_docs[d['id']] = d
-            # merge existing citations_deduped into raw_data
-            for d in raw_data:
-                if d['id'] in existing_docs:
-                    existing_citations = existing_docs[d['id']].get('citations_deduped', {})
-                    for url, content in existing_citations.items():
-                        if url in d['citations_deduped'] and content.get('url_content'):
-                            d['citations_deduped'][url] = content
-        
-        data_to_process = raw_data
-    except Exception as e:
-        import sys
-        print(f"cannot process file {args.raw_data_path}: {e}")
-        sys.exit(f'{args.raw_data_path} has not been processed yet...')
-    
-    print(f"processing {len(data_to_process)} instances...")
-    
-    all_results = []
-
-    def needs_scrape(v):
-            if 'url_content' not in v or not v['url_content']:
-                return True
-            if isinstance(v['url_content'], str) and v['url_content'].startswith('scrape failed'):
-                return True
-            return False
-    
-    for d in tqdm(data_to_process):
-        # get the citations that need to be scraped (URL-level filtering)
-        # scrape failed URLs will be retried (they might succeed next time)
-        citations = list([k for k, v in d['citations_deduped'].items() if needs_scrape(v)])
-        results = []
-
-        if citations:
-            n_total_process = min(args.n_total_process, len(citations))
-
-            if n_total_process == 1:
-                results = [scrape(citation) for citation in citations]
-            elif n_total_process > 1:
-                try:
-                    with ThreadPoolExecutor(max_workers=n_total_process) as executor:
-                        results = list(executor.map(scrape, citations))
-                except KeyboardInterrupt:
-                    print("scrape process interrupted")
-                    continue
-                except Exception as e:
-                    print(f"scrape process error: {e}")
-                    # if error, fallback to single thread
-                    results = [scrape(citation) for citation in citations]
-
-            # update the url_content
-            for res in results:
-                d['citations_deduped'][res['url']]['true_url'] = res['true_url']
-                d['citations_deduped'][res['url']]['url_content'] = res['url_content']
-                d['citations_deduped'][res['url']]['publish_time'] = res['publish_time']
-        
-        all_results.append(d)
-
-    # rewrite the entire output file to avoid duplicate IDs
-    with open(output_path, 'w', encoding='utf-8') as f:
-        for d in all_results:
-            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    if args.n_total_process < 1:
+        parser.error('--n_total_process must be at least 1')
+    raw_data = list(records_by_id(load_jsonl(args.raw_data_path)).values())
+    for record in raw_data:
+        if not isinstance(record.get('citations_deduped'), dict):
+            record['citations_deduped'] = {}
+            record['extraction_error'] = 'Missing or invalid citations_deduped input'
+    existing = records_by_id(load_jsonl(args.output_path)) if os.path.exists(args.output_path) else {}
+    merge_scrape_cache(raw_data, existing)
+    write_jsonl(args.output_path, raw_data)
+    print(f'Processing {len(raw_data)} reports...')
+    with ThreadPoolExecutor(max_workers=args.n_total_process) as executor:
+        for record in tqdm(raw_data):
+            citations = [url for url, value in record.get('citations_deduped', {}).items() if needs_scrape(value)]
+            for result in executor.map(scrape, citations):
+                citation = record['citations_deduped'][result['url']]
+                old_content = citation.get('url_content')
+                for field in ('url_content', 'true_url', 'publish_time', 'scrape_error'):
+                    citation[field] = result[field]
+                if old_content != citation['url_content']:
+                    citation.pop('validate_res', None)
+                    citation.pop('validate_error', None)
+                    citation.pop('validation_model', None)
+                write_jsonl(args.output_path, raw_data)
+    failed = sum(needs_scrape(citation) for record in raw_data
+                 for citation in record.get('citations_deduped', {}).values())
+    failed += sum(bool(record.get('dedup_error') or record.get('extraction_error')) for record in raw_data)
+    if failed:
+        print(f'Citation scraping incomplete: {failed} failure(s); rerun to retry.')
+    sys.exit(1 if failed else 0)

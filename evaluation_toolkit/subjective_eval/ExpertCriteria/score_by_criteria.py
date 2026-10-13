@@ -12,14 +12,104 @@ import concurrent.futures
 import json
 import re
 import time
+import math
+import unicodedata
 from evaluation_toolkit.model_clients import *
 import argparse
 from tqdm import tqdm
 
 from evaluation_toolkit import safe_json_loads
 from evaluation_toolkit.utils import get_project_root
+from evaluation_toolkit.subjective_eval.runtime import atomic_save, valid_report, fingerprint, validate_questions
+from evaluation_toolkit.subjective_eval.scoring.provenance import question_fingerprint, report_fingerprint
 
 client = OPENROUTER
+
+
+def parse_criteria_dimensions(criteria_text):
+    """Read the numbered Markdown dimensions and point caps in public rubrics.
+
+    Unstructured custom rubric text returns an empty mapping. A rubric containing
+    numbered dimension headings must be completely parseable and total 100.
+    """
+    if not isinstance(criteria_text, str):
+        raise ValueError("Scoring criteria must be text")
+    dimensions = {}
+    primary = None
+    primary_caps = {}
+    for raw_line in criteria_text.splitlines():
+        line = unicodedata.normalize("NFKC", raw_line).strip().strip("*").strip()
+        if not (line.startswith("#") or raw_line.strip().startswith("**")):
+            continue
+        heading = re.sub(r"^#+\s*", "", line)
+        top = re.match(r"^(\d+)\.\s+", heading)
+        sub = re.match(r"^\((\d+)\)\s*", heading)
+        if not top and not sub:
+            continue
+        points = re.search(r"\((?:共\s*)?(\d+(?:\.\d+)?)\s*(?:points?|分)\)\s*$", heading, re.I)
+        if points is None:
+            raise ValueError(f"Cannot parse dimension point limit: {raw_line}")
+        cap = float(points.group(1))
+        if top:
+            primary = top.group(1)
+            if primary in primary_caps:
+                raise ValueError(f"Duplicate primary dimension {primary}")
+            primary_caps[primary] = cap
+        else:
+            if primary is None:
+                raise ValueError("Secondary dimension has no primary heading")
+            dimension_id = f"{primary}.{sub.group(1)}"
+            if dimension_id in dimensions:
+                raise ValueError(f"Duplicate dimension {dimension_id} in scoring criteria")
+            dimensions[dimension_id] = cap
+    if primary_caps:
+        for primary, cap in primary_caps.items():
+            subtotal = sum(v for k, v in dimensions.items() if k.split(".")[0] == primary)
+            if not math.isclose(subtotal, cap):
+                raise ValueError(f"Incomplete scoring criteria for primary dimension {primary}: {subtotal} != {cap}")
+        if not math.isclose(sum(dimensions.values()), 100):
+            raise ValueError("Scoring criteria dimension limits must total 100")
+    return dimensions
+
+
+def validate_dimension_scores(dimension_scores, eval_criteria):
+    if not isinstance(dimension_scores, list) or not dimension_scores:
+        raise ValueError("Judge must return a nonempty JSON array of dimension scores")
+    limits = parse_criteria_dimensions(eval_criteria)
+    seen = set()
+    total = 0
+    for dimension in dimension_scores:
+        if not isinstance(dimension, dict):
+            raise ValueError("Each dimension score must be a JSON object")
+        dimension_id = dimension.get("dimension_id")
+        if not isinstance(dimension_id, str) or not re.fullmatch(r"\d+\.\d+", dimension_id):
+            raise ValueError("Each score requires a dimension_id such as 1.1")
+        if dimension_id in seen:
+            raise ValueError(f"Duplicate score dimension {dimension_id}")
+        seen.add(dimension_id)
+        score = dimension.get("score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+            raise ValueError(f"Dimension {dimension_id} score must be a finite number")
+        if limits and dimension_id not in limits:
+            raise ValueError(f"Unexpected score dimension {dimension_id}")
+        cap = limits.get(dimension_id, 100)
+        if score < 0 or score > cap:
+            raise ValueError(f"Dimension {dimension_id} score must be between 0 and {cap}")
+        total += score
+    if limits and seen != set(limits):
+        raise ValueError(f"Missing score dimensions: {sorted(set(limits) - seen)}")
+    if not math.isfinite(total) or total > 100:
+        raise ValueError("Total expert score must be between 0 and 100")
+    return total
+
+
+def score_fingerprint(question, report, judge):
+    language = question.get("language", "zh")
+    criteria = (question.get("expert_evaluation_criteria_en") or question["expert_evaluation_criteria"]) if language == "en" else question["expert_evaluation_criteria"]
+    return fingerprint({"judge": judge, "question": question.get("question_en") or question.get("question"),
+                        "report": report["response"], "report_model": report["model"],
+                        "prompt": format_whole_prompt(criteria, report["response"], language),
+                        "dimension_limits": parse_criteria_dimensions(criteria), "schema_version": 2})
 
 def format_whole_prompt(criteria_text, report_text, q_language):
     prompt_template_zh = f"""你是一位极其严苛的金融研究报告资深评审专家。你的任务是仔细阅读【研究报告】，对照【评分标准】进行极其严格的量化评估。
@@ -116,7 +206,7 @@ def format_whole_prompt(criteria_text, report_text, q_language):
 def call_llm(messages):
     # print(f"Calling LLM...")
     response = client.chat.completions.create(
-        model=args.judge,
+        model=resolve_openrouter_model(args.judge),
         messages=messages,
         temperature=0.0,
         # response_format={
@@ -124,6 +214,7 @@ def call_llm(messages):
         # }
     )
 
+    require_complete_chat(response)
     eval_result = response.choices[0].message.content
 
     return eval_result
@@ -201,6 +292,9 @@ def evaluate_report_with_whole_criteria(report_text, eval_criteria, q_language):
 
     # Generate prompt
     eval_prompts = format_whole_prompt(eval_criteria, report_text, q_language)
+    limits = parse_criteria_dimensions(eval_criteria)
+    if limits:
+        eval_prompts += "\nRequired dimension_id values and maximum scores (return every ID exactly once):\n" + json.dumps(limits, ensure_ascii=False)
 
     if eval_prompts:
         # print("Evaluation prompt constructed")
@@ -221,7 +315,7 @@ def evaluate_report_with_whole_criteria(report_text, eval_criteria, q_language):
     # Parse result
     dimension_scores = safe_json_loads(dimension_scores_str)
 
-    eval_result['total_score'] = sum(int(dimension_score["score"]) for dimension_score in dimension_scores)
+    eval_result['total_score'] = validate_dimension_scores(dimension_scores, eval_criteria)
     eval_result["dimensions_breakdown"] = dimension_scores
 
     return eval_result
@@ -237,14 +331,13 @@ def process_single_report(task_id, report_content, args, question_dict):
 
     # Load question
     q_language = q_item.get('language', 'zh')
-    task_prompt = q_item['question'] if q_language == 'zh' else q_item['question_en']
+    task_prompt = (q_item.get('question_en') or q_item.get('question')) if q_language == 'en' else q_item.get('question')
 
     if not task_prompt:
         return None, f"Question content for task_id {task_id} is empty"
 
     # Load criteria
-    eval_criteria = q_item['expert_evaluation_criteria'] if q_language == 'zh' else q_item[
-        'expert_evaluation_criteria_en']
+    eval_criteria = (q_item.get('expert_evaluation_criteria_en') or q_item['expert_evaluation_criteria']) if q_language == 'en' else q_item['expert_evaluation_criteria']
 
     # Load article
     eval_report = report_content["response"]
@@ -263,6 +356,10 @@ def process_single_report(task_id, report_content, args, question_dict):
         result = {
             "task_id": task_id,
             "model": args.report_model,
+            "judge": args.judge,
+            "score_fingerprint": score_fingerprint(q_item, report_content, args.judge),
+            "question_fingerprint": question_fingerprint(q_item),
+            "report_fingerprint": report_fingerprint(task_id, report_content),
             "question": task_prompt,
             **new_score_record
         }
@@ -273,114 +370,109 @@ def process_single_report(task_id, report_content, args, question_dict):
         return None, f"Exception occurred during evaluation of Task {task_id}: {str(e)}"
 
 def main(args):
+    globals()["args"] = args
+    if args.max_workers < 1:
+        raise ValueError("max_workers must be at least 1")
+    if args.max_samples is not None and args.max_samples < 1:
+        raise ValueError("max_samples must be positive")
     # Load question data
     with open(args.question_path, 'r', encoding='utf-8') as f:
         question_data = json.load(f)
+    question_data = validate_questions(question_data)
 
-    question_dict = {item["id"]: item for item in question_data}
+    question_dict = {str(item["id"]): item for item in question_data}
+    if len(question_dict) != len(question_data):
+        raise ValueError("Question IDs must be unique")
 
     # Load reports to be scored
-    report_path = os.path.normpath(os.path.join(args.report_dir, f"reports_{args.report_model}.json"))
+    model_filename = os.path.basename(args.report_model)
+    report_path = os.path.normpath(os.path.join(args.report_dir, f"reports_{model_filename}.json"))
 
     # Read generated report content
     with open(report_path, "r", encoding="utf-8") as f:
         reports_data = json.load(f)
+    if not isinstance(reports_data, dict):
+        raise ValueError("Reports must be a JSON object")
+    selected_ids = list(question_dict)[:args.max_samples] if args.max_samples is not None else list(question_dict)
+    missing_reports = set(selected_ids) - set(reports_data)
+    unknown_reports = set(reports_data) - set(question_dict)
+    if missing_reports:
+        print(f"Reports missing for selected tasks: {sorted(missing_reports)}")
+    if unknown_reports:
+        print(f"Ignoring reports with unknown task IDs: {sorted(unknown_reports)}")
 
 
-    output_dir = os.path.join(args.output_dir, f"judge_{args.judge}")
-    output_path = os.path.join(output_dir, f"scores_{args.report_model}.jsonl")
+    output_dir = os.path.join(args.output_dir, f"judge_{os.path.basename(args.judge)}")
+    output_path = os.path.join(output_dir, f"scores_{model_filename}.jsonl")
 
     print(f"Expected output file: {output_path}")
 
-    # Check for existing saved scoring results
-    already_scored_tasks = set()
-
+    # A cached row is complete only when every rubric dimension is valid.
+    cached_records = {}
     if os.path.exists(output_path):
-        try:
-            with open(output_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip():  # ensure not an empty line
-                        score_record = json.loads(line)
-                        already_scored_tasks.add(score_record["task_id"])
-        except Exception as e:
-            print(f"Error reading existing scoring results: {e}")
-            already_scored_tasks = set()
-    else:
-        print(f"{output_path} does not exist, will create it")
-        os.makedirs(output_dir, exist_ok=True)
+        with open(output_path, 'r', encoding='utf-8') as stream:
+            for line_number, line in enumerate(stream, 1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                    if record.get("model") not in (None, args.report_model):
+                        raise RuntimeError("Score filename is already used by a different model; choose a separate output_dir")
+                    if record.get("judge") and resolve_openrouter_model(record["judge"]) != resolve_openrouter_model(args.judge):
+                        raise RuntimeError("Score output directory is already used by a different judge; choose a separate output_dir")
+                    task_id = str(record["task_id"])
+                    question = question_dict[task_id]
+                    criteria = (question.get("expert_evaluation_criteria_en") or question["expert_evaluation_criteria"]) if question.get("language") == "en" else question["expert_evaluation_criteria"]
+                    total = validate_dimension_scores(record["dimensions_breakdown"], criteria)
+                    if record.get("model") != args.report_model or record.get("judge") != args.judge or record.get("total_score") != total or record.get("score_fingerprint") != score_fingerprint(question, reports_data[task_id], args.judge):
+                        raise ValueError("Incomplete or inconsistent cached score")
+                    if (record.get("question_fingerprint") != question_fingerprint(question)
+                            or record.get("report_fingerprint") != report_fingerprint(task_id, reports_data[task_id])):
+                        raise ValueError("Cached score provenance does not match current questions and reports")
+                    cached_records[task_id] = record
+                except RuntimeError:
+                    raise
+                except Exception as exc:
+                    print(f"Ignoring invalid cached score on line {line_number}: {exc}")
 
-    # Filter out unscored reports
-    unprocessed_reports = {}
-    for task_id, report_content in reports_data.items():
-        if task_id not in already_scored_tasks:
-            unprocessed_reports[task_id] = report_content
-        else:
-            print(f"Task {task_id} already scored, skipping")
-
-    print(f"Total {len(reports_data)} tasks, {len(unprocessed_reports)} tasks pending scoring")
-
-    if not unprocessed_reports:
-        print("No new tasks to score, exiting")
-        exit(0)
-
-    save_interval = 1  # save every N tasks, adjust as needed
-
-    # Truncate task list in advance based on max_samples to avoid submitting extra tasks
-    items_to_process = list(unprocessed_reports.items())
-    if args.max_samples:
-        items_to_process = items_to_process[:args.max_samples]
-        print(f"Set max_samples = {args.max_samples}, will process {len(items_to_process)} tasks")
-
-    buffer = []
+    items_to_process = [(task_id, reports_data[task_id]) for task_id in selected_ids
+                        if task_id in reports_data and task_id not in cached_records]
+    print(f"Total {len(reports_data)} reports, {len(items_to_process)} tasks pending scoring")
     total_processed = 0
-    # Concurrency can be configured in args, default is 10 if not set
-    max_workers = getattr(args, 'max_workers', 10)
-
-    print(f"\nStarting concurrent evaluation, concurrency: {max_workers}")
-
-    # Use thread pool
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks to the thread pool
-        future_to_task = {
-            executor.submit(process_single_report, task_id, report_content, args, question_dict): task_id
-            for task_id, report_content in items_to_process
-        }
-
-        # Use as_completed with tqdm to get completed results as they finish
-        for future in tqdm(concurrent.futures.as_completed(future_to_task), total=len(items_to_process),
-                           desc="Scoring progress"):
-            task_id = future_to_task[future]
-
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers)
+    futures = {}
+    try:
+        for task_id, content in items_to_process:
+            if not valid_report(content, args.report_model):
+                print(f"[SKIP] Task {task_id} has an empty report or different model")
+                continue
+            futures[executor.submit(process_single_report, task_id, content, args, question_dict)] = task_id
+        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Scoring progress"):
+            task_id = futures[future]
             try:
-                result, log_msg = future.result()
-
-                if result is not None:
-                    buffer.append(result)
-                    total_processed += 1
-                else:
-                    tqdm.write(f"[SKIP] {log_msg}")
-
-                    # Handle file saving in the main thread to ensure thread safety
-                    if len(buffer) >= save_interval:
-                        # tqdm.write(f"Processed {total_processed} tasks, saving intermediate results...")
-                        with open(output_path, "a", encoding="utf-8") as f:
-                            for item in buffer:
-                                f.write(json.dumps(item, ensure_ascii=False) + "\n")
-                        buffer.clear()
-                        # tqdm.write("Intermediate results saved")
-
+                result, log_message = future.result()
             except Exception as exc:
-                tqdm.write(f"Task {task_id} raised a fatal exception: {exc}")
-
-    # Save remaining results to file
-    if len(buffer) > 0:
-        print(f"\nSaving results of the last {len(buffer)} tasks...")
-        with open(output_path, "a", encoding="utf-8") as f:
-            for item in buffer:
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        print("All results saved")
-
-    print(f"Processed {total_processed} tasks in total, scoring results saved to: {output_path}")
+                print(f"Task {task_id} failed: {exc}")
+                continue
+            if result is None:
+                print(f"[SKIP] {log_message}")
+                continue
+            cached_records[task_id] = result
+            atomic_save(output_path, list(cached_records.values()), jsonl=True)
+            total_processed += 1
+    except BaseException:
+        for future in futures:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
+    atomic_save(output_path, list(cached_records.values()), jsonl=True)
+    failed = len(items_to_process) - total_processed + len(missing_reports) + len(unknown_reports)
+    print(f"Processed {total_processed} tasks; scores saved to {output_path}")
+    if failed:
+        print(f"Scoring incomplete: {failed} task(s) failed; rerun to retry.")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
@@ -399,5 +491,4 @@ if __name__ == "__main__":
     parser.add_argument("--max_workers", type=int, default=10, help="Number of concurrent workers")
 
     args = parser.parse_args()
-    main(args)
-
+    sys.exit(main(args))

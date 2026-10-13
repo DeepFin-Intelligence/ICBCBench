@@ -14,45 +14,81 @@ import time
 from dotenv import load_dotenv
 from google import genai
 from evaluation_toolkit.DR_clients.DeepResearch import DeepResearchModel
-
-load_dotenv()
-
+from evaluation_toolkit.model_clients import load_project_env
+from evaluation_toolkit.DR_clients.citations import json_value, render_annotations
 
 class GeminiDeepResearch(DeepResearchModel):
-    def __init__(self, api_key: str = None, agent_name: str = 'deep-research-pro-preview-12-2025'):
+    def __init__(self, api_key: str = None, agent_name: str = 'deep-research-preview-04-2026', **kwargs):
         self.agent_name = agent_name
-        super().__init__(api_key)
+        super().__init__(api_key, **kwargs)
 
     def validate_env(self):
-        load_dotenv()
+        load_project_env()
         if not self.api_key:
             self.api_key = os.getenv("GEMINI_API_KEY")
+        if not self.api_key:
+            raise ValueError("Missing GEMINI_API_KEY")
         self.client = genai.Client(api_key=self.api_key)
 
     def run_research(self, system_prompt, dr_task, multimodal_content=None):
-        # Gemini interactions.create only accepts string input.
-        # Extract text from multimodal content if provided.
         if isinstance(multimodal_content, list):
-            text_parts = [block["text"] for block in multimodal_content if block.get("type") == "text"]
-            image_count = sum(1 for block in multimodal_content if block.get("type") == "image_url")
-            if image_count > 0:
-                text_parts.append(f"[Note: {image_count} image(s) attached but not processable by Gemini Deep Research Agent]")
-            query = f"{system_prompt}\n" + "\n".join(text_parts)
+            query = [{"type": "text", "text": system_prompt}]
+            for block in multimodal_content:
+                if block.get("type") == "text":
+                    query.append({"type": "text", "text": block["text"]})
+                elif block.get("type") == "image_url":
+                    url = block.get("image_url", {}).get("url", "")
+                    if url.startswith("data:"):
+                        header, data = url.split(",", 1)
+                        query.append({"type": "image", "mime_type": header[5:].split(";")[0], "data": data})
+                    else:
+                        query.append({"type": "image", "uri": url})
         else:
-            query = f"{system_prompt}\n{dr_task}"
+            task = multimodal_content if multimodal_content is not None else dr_task
+            query = f"{system_prompt}\n{task}"
 
-        interaction = self.client.interactions.create(
-            input=query,
-            agent=self.agent_name,
-            background=True
-        )
-
-        while True:
-            interaction = self.client.interactions.get(interaction.id)
-            if interaction.status == "completed":
-                result = interaction.outputs[-1].text
-                return {"content": result}
-            elif interaction.status == "failed":
-                error_msg = f"Research failed: {interaction.error}"
-                return {"content": error_msg}
-            time.sleep(10)
+        deadline = self.deadline()
+        interaction = None
+        task_id = None
+        try:
+            self.check_deadline(deadline)
+            interaction = self.client.interactions.create(
+                input=query,
+                agent=self.agent_name,
+                background=True,
+                timeout=min(getattr(self, "timeout_seconds", 3600), 60)
+            )
+            task_id = getattr(interaction, "id", None)
+            while True:
+                self.check_deadline(deadline)
+                interaction = self.client.interactions.get(interaction.id, timeout=min(60, max(0.1, deadline - time.monotonic())))
+                self.check_deadline(deadline)
+                if interaction.status == "completed":
+                    parts, citations, raw_citations = [], [], []
+                    for step in (getattr(interaction, "steps", None) or []):
+                        if getattr(step, "type", "") != "model_output":
+                            continue
+                        for part in (getattr(step, "content", None) or []):
+                            text = getattr(part, "text", None)
+                            if not isinstance(text, str):
+                                continue
+                            raw = json_value(getattr(part, "annotations", None) or [])
+                            rendered, normalized = render_annotations(text, raw, byte_offsets=True)
+                            parts.append(rendered)
+                            citations.extend(normalized)
+                            raw_citations.extend(raw)
+                    result = "".join(parts) or getattr(interaction, "output_text", None)
+                    if not result:
+                        outputs = getattr(interaction, "outputs", None) or []
+                        result = "".join(getattr(output, "text", "") or "" for output in outputs)
+                    return {"content": self.require_content(result), "citations": citations, "raw_citations": raw_citations}
+                elif interaction.status in ("failed", "cancelled", "requires_action"):
+                    detail = getattr(interaction, "errors", None) or getattr(interaction, "error", None)
+                    raise RuntimeError(f"Research ended with {interaction.status}: {detail}")
+                self.poll_wait(deadline)
+        except BaseException as exc:
+            if task_id and getattr(interaction, "status", None) not in ("completed", "failed", "cancelled"):
+                self.cancel_background(self.client.interactions, task_id, exc)
+            if task_id and hasattr(exc, "add_note"):
+                exc.add_note(f"research_task_id={task_id}")
+            raise

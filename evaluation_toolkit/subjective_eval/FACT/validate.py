@@ -15,13 +15,13 @@ import time
 import argparse
 from tqdm import tqdm
 from functools import partial
-from evaluation_toolkit.subjective_eval.FACT.utils import load_jsonl
+from evaluation_toolkit.subjective_eval.FACT.utils import load_jsonl, write_jsonl, records_by_id, normalize_validation, validation_cache_matches
 from evaluation_toolkit.utils import load_local_dataset
 from evaluation_toolkit.model_clients import *
 
 import platform
 
-client = MYDMX
+client = OPENROUTER
 
 prompt_template = """你会看到一个参考资料和一些statement，请你判断对于参考资料来说statement是supported、unsupported、或者unknown，注意：
 首先判断参考资料是否存在有效内容，如果参考资料中没有任何有效信息，如"page not found"页面，则认为所有statement的状态都是unknown。
@@ -77,13 +77,17 @@ Below are the reference and statements:
 
 Begin the assessment now. Output only the JSON list, without any conversational text or explanations."""
 
-def validate(data, id_to_lang_map):
+def validate(data, id_to_lang_map, judge_model="google/gemini-3-flash-preview"):
     url = data[0]
-    ref = data[1]['url_content']
-    facts = data[1]['facts']
+    ref = data[1].get('url_content')
+    facts = data[1].get('facts')
     article_id = data[1].get('article_id')
 
-    if ref is None:
+    if not isinstance(facts, list) or any(not isinstance(fact, str) or not fact.strip() for fact in facts):
+        return {'url': url, 'validate_res': [], 'error': 'Facts must be a list of nonempty text'}
+    if not facts:
+        return {'url': url, 'validate_res': [], 'error': None}
+    if not isinstance(ref, str) or not ref.strip():
         return {
             "url": url,
             "validate_res": [],
@@ -94,7 +98,7 @@ def validate(data, id_to_lang_map):
     if isinstance(ref, str) and ref.startswith('scrape failed'):
         return {
             "url": url,
-            "validate_res": [{"idx": i + 1, "result": "unknown"} for i in range(len(facts))],
+            "validate_res": [{"idx": i, "result": "unknown"} for i in range(len(facts))],
             "error": None
         }
     
@@ -140,17 +144,17 @@ def validate(data, id_to_lang_map):
         try:
             # response = call_model(user_prompt)
             response = client.chat.completions.create(
-                model="gemini-3-flash-preview",
+                model=resolve_openrouter_model(judge_model),
                 messages=[{"role": "user", "content": user_prompt}],
-                response_format={'type': 'json_object'},
             )
+            if getattr(response.choices[0], 'finish_reason', None) in ('length', 'content_filter'):
+                raise ValueError('Validation response did not finish normally')
 
             response = response.choices[0].message.content
 
-            validate_res = json.loads(response.replace("```json", "").replace("```", ""))
-            for _v in validate_res:
-                _v['idx'] -= 1
-            assert len(validate_res) == len(facts)
+            validate_res = normalize_validation(
+                json.loads(response.replace("```json", "").replace("```", "")),
+                len(facts), one_based=True)
 
             return {
                 "url": url,
@@ -159,8 +163,9 @@ def validate(data, id_to_lang_map):
             }
         except Exception as e:
             error = str(e)
-            time.sleep(3)
             retries += 1
+            if retries < 3:
+                time.sleep(3)
     
     return {
         "url": url,
@@ -169,90 +174,76 @@ def validate(data, id_to_lang_map):
     } 
 
 
+def merge_validation_cache(raw_data, existing_docs, judge_model=None):
+    for record in raw_data:
+        previous = existing_docs.get(str(record['id']), {})
+        for url, citation in record.get('citations_deduped', {}).items():
+            cached = previous.get('citations_deduped', {}).get(url, {})
+            if validation_cache_matches(citation, cached, judge_model):
+                citation['validate_res'] = normalize_validation(cached['validate_res'], len(citation['facts']))
+                citation['validate_error'] = None
+                if cached.get('validation_model'):
+                    citation['validation_model'] = cached['validation_model']
+            elif not validation_cache_matches(citation, citation, judge_model):
+                citation.pop('validate_res', None)
+                citation.pop('validate_error', None)
+                citation.pop('validation_model', None)
+    return raw_data
+
+
 if __name__ == '__main__':
-    # if platform.system() == 'Darwin':
-    #     try:
-    #         multiprocessing.set_start_method('spawn')
-    #     except RuntimeError:
-    #         pass
-    # else:
-    #     try:
-    #         multiprocessing.set_start_method('fork')
-    #     except RuntimeError:
-    #         pass
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_path", type=str, required=True)
-    parser.add_argument("--raw_data_path", type=str, required=True)
-    parser.add_argument("--query_data_path", type=str, required=True, help="Path to query data with language information")
-    parser.add_argument("--n_total_process", type=int, default=1)
+    parser.add_argument('--output_path', required=True)
+    parser.add_argument('--raw_data_path', required=True)
+    parser.add_argument('--query_data_path', required=True)
+    parser.add_argument('--n_total_process', type=int, default=1)
+    parser.add_argument('--judge', default='google/gemini-3-flash-preview')
     args = parser.parse_args()
-    
-    output_path = args.output_path
-    raw_data = load_jsonl(args.raw_data_path)
-    
-    # Load the query data to get language information
-    query_data = load_local_dataset(args.query_data_path)
-    query_data = [dict(zip(query_data.keys(), values)) for values in zip(*query_data.values())]
-    
-    # Create a mapping from ID to language
-    id_to_lang_map = {item['id']: item['language'] for item in query_data if 'id' in item}
-    
+    if args.n_total_process < 1:
+        parser.error('--n_total_process must be at least 1')
+    raw_data = list(records_by_id(load_jsonl(args.raw_data_path)).values())
+    for record in raw_data:
+        if not isinstance(record.get('citations_deduped'), dict):
+            record['citations_deduped'] = {}
+            record['extraction_error'] = 'Missing or invalid citations_deduped input'
+    queries = load_local_dataset(args.query_data_path)
+    query_data = [dict(zip(queries.keys(), row)) for row in zip(*queries.values())]
+    id_to_lang_map = {str(item['id']): item['language'] for item in query_data}
     if not id_to_lang_map:
-        raise ValueError("No valid language information found in query data")
-    
-    n_total_process = args.n_total_process
-
-    # URL-level resume: merge existing validated data
-    existing_docs = {}
-    if os.path.exists(output_path):
-        for d in load_jsonl(output_path):
-            existing_docs[d['id']] = d
-        # merge existing citations_deduped into raw_data
-        for d in raw_data:
-            if d['id'] in existing_docs:
-                existing_citations = existing_docs[d['id']].get('citations_deduped', {})
-                for url, content in existing_citations.items():
-                    if url in d['citations_deduped'] and content.get('validate_res') is not None:
-                        d['citations_deduped'][url] = content
-
-    data_to_process = raw_data
-
-    print(f"Processing {len(data_to_process)} instances...")
-    
-    all_results = []
-
-    for d in tqdm(data_to_process):
-        # get the citations that need to be validated (URL-level filtering)
-        # retry URLs with validate_error on rerun
-        citations = [(k, v) for k, v in d['citations_deduped'].items() 
-                     if 'validate_res' not in v or v.get('validate_error') is not None]
-        
-        # Add article_id to each citation's value for language determination
-        article_id = d.get('id')
-        if not article_id:
-            print(f"Warning: Article has no ID field, skipping validation")
-            all_results.append(d)
-            continue
-            
-        for citation in citations:
-            citation[1]['article_id'] = article_id
-
-        if citations:
-            if n_total_process == 1:
-                results = [validate(citation, id_to_lang_map) for citation in citations]
-            elif n_total_process > 1:
-                run_partial = partial(validate, id_to_lang_map=id_to_lang_map)
-                with multiprocessing.Pool(processes=n_total_process) as pool:
-                    results = pool.map(run_partial, citations)
-            
-            for res in results:
-                d['citations_deduped'][res['url']]['validate_res'] = res['validate_res']
-                d['citations_deduped'][res['url']]['validate_error'] = res['error']
-        
-        all_results.append(d)
-
-    # rewrite the entire output file to avoid duplicate IDs
-    with open(output_path, 'w', encoding='utf-8') as f:
-        for d in all_results:
-            f.write(json.dumps(d, ensure_ascii=False) + "\n")
-
+        raise ValueError('No valid language information found in query data')
+    missing = set(id_to_lang_map) - {record['id'] for record in raw_data}
+    print(f'FACT input coverage: {len(id_to_lang_map) - len(missing)}/{len(id_to_lang_map)} reports; {len(missing)} missing.')
+    raw_data.extend({'id': identifier, 'citations_deduped': {},
+                     'extraction_error': 'Missing report in input'} for identifier in sorted(missing))
+    existing_docs = records_by_id(load_jsonl(args.output_path)) if os.path.exists(args.output_path) else {}
+    canonical_judge = resolve_openrouter_model(args.judge)
+    merge_validation_cache(raw_data, existing_docs, canonical_judge)
+    print(f'Processing {len(raw_data)} reports...')
+    worker = partial(validate, id_to_lang_map=id_to_lang_map, judge_model=args.judge)
+    pool = multiprocessing.Pool(args.n_total_process) if args.n_total_process > 1 else None
+    try:
+        write_jsonl(args.output_path, raw_data)
+        for record in tqdm(raw_data):
+            citations = []
+            for url, citation in record.get('citations_deduped', {}).items():
+                if not validation_cache_matches(citation, citation, canonical_judge):
+                    citation['article_id'] = record['id']
+                    citations.append((url, citation))
+            results = pool.imap(worker, citations) if pool else map(worker, citations)
+            for result in results:
+                citation = record['citations_deduped'][result['url']]
+                citation['validate_res'] = result['validate_res']
+                citation['validate_error'] = result['error']
+                citation['validation_model'] = canonical_judge
+                write_jsonl(args.output_path, raw_data)
+    finally:
+        if pool:
+            pool.close()
+            pool.join()
+    failed = sum(bool(citation.get('validate_error') is not None or citation.get('scrape_error')
+                 or (citation.get('url_content') or '').startswith('scrape failed')) for record in raw_data
+                 for citation in record.get('citations_deduped', {}).values())
+    failed += sum(bool(record.get('dedup_error') or record.get('extraction_error')) for record in raw_data)
+    if failed:
+        print(f'Citation validation incomplete: {failed} failure(s); rerun to retry.')
+    sys.exit(1 if failed else 0)

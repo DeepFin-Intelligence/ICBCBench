@@ -17,6 +17,57 @@ from tqdm import tqdm
 from evaluation_toolkit.subjective_eval.FACT.time_decay import *
 from evaluation_toolkit.subjective_eval.FACT import authority
 from evaluation_toolkit.utils import get_project_root
+from evaluation_toolkit.subjective_eval.FACT.utils import normalize_validation, records_by_id
+from evaluation_toolkit.subjective_eval.runtime import validate_questions
+from evaluation_toolkit.model_clients import resolve_openrouter_model
+from evaluation_toolkit.subjective_eval.scoring.provenance import (
+    question_fingerprint, task_set_fingerprint, report_set_fingerprint, valid_fingerprint)
+
+
+def complete_task_set(data, id_to_lang):
+    """Use the query set as the denominator and count missing reports as zero."""
+    records = records_by_id(data)
+    if not id_to_lang:
+        return list(records.values())
+    expected = {str(identifier) for identifier in id_to_lang}
+    unknown = set(records) - expected
+    if unknown:
+        raise ValueError(f'FACT results contain unknown task IDs: {sorted(unknown)}')
+    return [records.get(str(identifier), {'id': str(identifier), 'citations_deduped': {}})
+            for identifier in id_to_lang]
+
+
+def citation_results(citation):
+    try:
+        return normalize_validation(citation.get('validate_res'), len(citation.get('facts', [])))
+    except ValueError:
+        return []
+
+
+def task_is_complete(record):
+    if (record.get('extraction_error') or record.get('dedup_error')
+            or record.get('citations') == 'extraction failed'):
+        return False
+    citations = record.get('citations_deduped')
+    if not isinstance(citations, dict):
+        return False
+    # An extracted report containing no citations is a complete zero-score task.
+    for citation in citations.values():
+        if not isinstance(citation, dict):
+            return False
+        facts = citation.get('facts')
+        content = citation.get('url_content')
+        if (not isinstance(facts, list) or not facts
+                or any(not isinstance(fact, str) or not fact.strip() for fact in facts)
+                or not isinstance(content, str) or not content.strip()
+                or content.startswith('scrape failed') or citation.get('scrape_error')
+                or citation.get('validate_error') is not None):
+            return False
+        try:
+            normalize_validation(citation.get('validate_res'), len(facts))
+        except ValueError:
+            return False
+    return True
 
 def fact_evaluate(data, args, id_to_lang):
     # ======= Citation Link Validity (Strictly by definition: S_citation = (1/T) * sum(N_s,t / |U_t|) ========
@@ -47,10 +98,10 @@ def fact_evaluate(data, args, id_to_lang):
             # validate_error or scrape failed: count towards |U_t| but not N_s,t
             if c.get('validate_error') is not None:
                 continue
-            if c.get('url_content', '').startswith('scrape failed'):
+            if (c.get('url_content') or '').startswith('scrape failed'):
                 continue
 
-            validate_res = c.get('validate_res', [])
+            validate_res = citation_results(c)
             for i in range(min(n_facts, len(validate_res))):
                 if validate_res[i]['result'] == 'supported':
                     doc_support_citations += 1
@@ -104,13 +155,13 @@ def authority_evaluate(data, args, id_to_lang):
             # validate_error or scrape failed: count towards |U_t| but not weighted sum
             if c.get('validate_error') is not None:
                 continue
-            if c.get('url_content', '').startswith('scrape failed'):
+            if (c.get('url_content') or '').startswith('scrape failed'):
                 continue
 
             true_url = c.get('true_url', url)
             auth_weight = authority.get_authority_weight(true_url)
 
-            validate_res = c.get('validate_res', [])
+            validate_res = citation_results(c)
             for i in range(min(n_facts, len(validate_res))):
                 if validate_res[i]['result'] == 'supported':
                     doc_weighted_support_sum += auth_weight
@@ -228,18 +279,17 @@ def source_evaluate(data, args, id_to_lang):
         source_scores = []
 
         for url, c in citations_deduped.items():
-            # Skip citations with validation errors
-            if c.get('validate_error') is not None:
-                continue
-
             true_url = c.get('true_url', url)
             auth_score = authority.get_authority_weight(true_url)
 
             publish_time = c.get('publish_time')
             time_score = calculate_time_score(publish_time, alpha=0.002)
-            # Skip citations with unparsable publication time
-            if time_score < 0:
-                continue
+            # Unknown dates and failed sources stay in the URL denominator.
+            # Authority is meaningful independently of date availability.
+            time_score = max(0, time_score)
+            if c.get('validate_error') is not None or (c.get('url_content') or '').startswith('scrape failed'):
+                auth_score = 0
+                time_score = 0
 
             auth_scores.append(auth_score)
             time_scores.append(time_score)
@@ -274,6 +324,7 @@ def source_evaluate(data, args, id_to_lang):
 
 
 def filter_data_by_language(data, language_filter, id_to_lang):
+    data = complete_task_set(data, id_to_lang)
     if not language_filter or not id_to_lang:
         return data
 
@@ -284,7 +335,12 @@ def filter_data_by_language(data, language_filter, id_to_lang):
         raw_lang = id_to_lang.get(doc_id, '').lower()
 
         # Normalization logic
-        query_language = "zh" if raw_lang in ["zh", "chinese", "中文", "zh-cn"] else "en"
+        if raw_lang in ["zh", "chinese", "中文", "zh-cn"]:
+            query_language = 'zh'
+        elif raw_lang in ['en', 'english', 'en-us', 'en-gb']:
+            query_language = 'en'
+        else:
+            raise ValueError(f'Unsupported language for task {doc_id}: {raw_lang}')
 
         if query_language == language_filter:
             filtered_data.append(d)
@@ -292,14 +348,49 @@ def filter_data_by_language(data, language_filter, id_to_lang):
     print(f"[{language_filter} filter] Original {len(data)} records -> Retained {len(filtered_data)} records after filtering")
     return filtered_data
 
-def run_stat(args, id_to_lang, output_csv, language_filter):
+def run_stat(args, id_to_lang, output_csv, language_filter, query_records=None):
     """Run one round of statistics and write to CSV"""
     # Temporarily set language filter
     original_filter = getattr(args, 'language_filter', None)
     args.language_filter = language_filter
+    if not isinstance(args.model_name, str) or not args.model_name.strip():
+        raise ValueError('FACT model_name must be nonempty text')
+    questions = validate_questions(query_records, require_question=False) if query_records is not None else []
+    question_by_id = {question['id']: question for question in questions}
+    if questions and {question['id']: question['language'] for question in questions} != id_to_lang:
+        raise ValueError('FACT query records do not match the task-language mapping')
 
     # 1. Read data (re-read each time to avoid modification by time_decay)
     raw_data = load_jsonl(args.input_path)
+    for record in raw_data:
+        if not isinstance(record.get('citations_deduped'), dict):
+            record['citations_deduped'] = {}
+            record['extraction_error'] = 'Missing or invalid citations_deduped input'
+    records = records_by_id(raw_data)
+    expected = complete_task_set(raw_data, id_to_lang)
+    scoped = filter_data_by_language(expected, language_filter, id_to_lang)
+    missing = [record['id'] for record in scoped if record['id'] not in records]
+    evaluated_tasks = sum(record['id'] in records and task_is_complete(record) for record in scoped)
+    total_tasks = len(scoped)
+    incomplete = total_tasks - evaluated_tasks - len(missing)
+    coverage = 100 * evaluated_tasks / total_tasks if total_tasks else 0
+    report_hashes = {}
+    provenance_verified = bool(questions) and total_tasks > 0 and evaluated_tasks == total_tasks
+    for record in scoped:
+        identifier = record['id']
+        report_hash = record.get('report_fingerprint')
+        question = question_by_id.get(identifier)
+        model = record.get('model')
+        if (not valid_fingerprint(report_hash) or question is None
+                or record.get('question_fingerprint') != question_fingerprint(question)
+                or not isinstance(model, str)
+                or resolve_openrouter_model(model.strip().lower()) != resolve_openrouter_model(args.model_name.strip().lower())):
+            provenance_verified = False
+        else:
+            report_hashes[identifier] = report_hash
+    task_hash = task_set_fingerprint([question_by_id[record['id']] for record in scoped]) if questions and scoped else ''
+    print(f'FACT coverage: {evaluated_tasks}/{total_tasks} completed tasks ({coverage:.2f}%); '
+          f'{len(missing)} missing, {incomplete} incomplete task(s).')
 
     # 2. Use temporary file to calculate time decay
     temp_timed_path = os.path.join(tempfile.gettempdir(), f'finhle_temp_timed_{os.getpid()}.jsonl')
@@ -318,6 +409,11 @@ def run_stat(args, id_to_lang, output_csv, language_filter):
     row = {
         "Model Name": args.model_name,
         "Total Tasks": fact_res.get("Total Tasks", 0),
+        "Evaluated Tasks": evaluated_tasks,
+        "Coverage (%)": coverage,
+        "Task Set Fingerprint": task_hash,
+        "Report Set Fingerprint": report_set_fingerprint(report_hashes) if provenance_verified else '',
+        "Provenance Verified": provenance_verified,
         "Avg Citation Score (Macro)": fact_res.get("Avg Citation Score (Macro)", 0),
         "Avg Source Authority Score (S_auth)": source_res.get("Avg Source Authority Score (S_auth)", 0),
         "Avg Source Timeliness Score (S_time)": source_res.get("Avg Source Timeliness Score (S_time)", 0),
@@ -326,23 +422,31 @@ def run_stat(args, id_to_lang, output_csv, language_filter):
 
     # 5. Write to CSV
     os.makedirs(os.path.dirname(output_csv) or '.', exist_ok=True)
-    file_exists = os.path.isfile(output_csv)
-
-    with open(output_csv, mode='a', newline='', encoding='utf-8') as f:
-        fieldnames = ["Model Name", "Total Tasks", "Avg Citation Score (Macro)",
+    existing_rows = []
+    if os.path.isfile(output_csv):
+        with open(output_csv, newline='', encoding='utf-8-sig') as handle:
+            existing_rows = [existing for existing in csv.DictReader(handle)
+                             if resolve_openrouter_model(existing.get('Model Name', '').strip().lower())
+                             != resolve_openrouter_model(args.model_name.strip().lower())]
+    fd, temporary_csv = tempfile.mkstemp(prefix='.fact-', suffix='.csv', dir=os.path.dirname(os.path.abspath(output_csv)))
+    with os.fdopen(fd, mode='w', newline='', encoding='utf-8') as f:
+        fieldnames = ["Model Name", "Total Tasks", "Evaluated Tasks", "Coverage (%)", "Avg Citation Score (Macro)",
                       "Avg Source Authority Score (S_auth)", "Avg Source Timeliness Score (S_time)",
-                      "Avg Source Quality Score (S_source)"]
+                      "Avg Source Quality Score (S_source)", "Task Set Fingerprint", "Report Set Fingerprint", "Provenance Verified"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
 
-        if not file_exists:
-            writer.writeheader()
-
+        writer.writeheader()
+        writer.writerows(existing_rows)
         writer.writerow(row)
+    os.replace(temporary_csv, output_csv)
 
-    print(f"\nEvaluation results successfully appended to: {output_csv}")
+    print(f"\nEvaluation results saved to: {output_csv}")
 
     # Restore original language filter
     args.language_filter = original_filter
+    if not provenance_verified:
+        print('FACT leaderboard has unverified provenance; regenerate FACT results with the current toolkit before final aggregation.')
+    return total_tasks - evaluated_tasks + int(not provenance_verified)
 
 
 if __name__ == "__main__":
@@ -357,9 +461,12 @@ if __name__ == "__main__":
     parser.add_argument("--query_file", type=str, default=default_query_file, help="Path to the question JSONL file")
     parser.add_argument("--language_filter", type=str, required=False)
     args = parser.parse_args()
+    if args.language_filter not in (None, 'zh', 'en'):
+        parser.error('--language_filter must be zh or en')
 
     with open(args.query_file, "r", encoding="utf-8") as f:
         query_data = json.load(f)
+    query_data = validate_questions(query_data, require_question=False)
 
     id_to_lang = {
         str(item["id"]): item.get("language", "").lower()
@@ -368,10 +475,11 @@ if __name__ == "__main__":
 
     if args.language_filter:
         # Run only the specified language
-        run_stat(args, id_to_lang, args.output_csv, args.language_filter)
+        failed = run_stat(args, id_to_lang, args.output_csv, args.language_filter, query_data)
     else:
         # Default: run all three versions (consistent with ExpertCriteria/stat.py)
         base, ext = os.path.splitext(args.output_csv)
+        failed = 0
         for lang in [None, "zh", "en"]:
             if lang:
                 output_csv = f"{base}_{lang}{ext}"
@@ -380,9 +488,5 @@ if __name__ == "__main__":
             print(f"\n{'='*50}")
             print(f"Processing: {lang.upper() if lang else 'ALL'}")
             print(f"{'='*50}")
-            run_stat(args, id_to_lang, output_csv, lang)
-
-
-
-
-
+            failed += run_stat(args, id_to_lang, output_csv, lang, query_data)
+    sys.exit(1 if failed else 0)

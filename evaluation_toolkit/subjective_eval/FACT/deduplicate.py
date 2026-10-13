@@ -15,9 +15,9 @@ import argparse
 from functools import partial
 from evaluation_toolkit.utils import load_local_dataset
 from evaluation_toolkit.model_clients import *
-from evaluation_toolkit.subjective_eval.FACT.utils import load_jsonl, safe_json_parse
+from evaluation_toolkit.subjective_eval.FACT.utils import load_jsonl, write_jsonl, records_by_id, validate_citations, valid_deduplication_cache
 
-client = DMX
+client = OPENROUTER
 
 prompt_template = """你会看到一个statement列表，你需要对其去重，并返回去重后的statement序号列表，注意：只有表达完全一致的事情时，两个statement才被认为是重复的，如果列表中没有重复的statement，则返回完整的列表。
 
@@ -41,156 +41,114 @@ Below is the list of statements you need to de-duplicate:
 Please begin the extraction now. Output only the integer list, without any conversational text or explanations."""
 
 
-def run(data, output_path, id_to_lang_map):
-    for i, d in enumerate(data):
-        # if the citations extraction failed or there is no citation, pass through with empty citations_deduped
-        if d['citations'] == "extraction failed" or not d['citations']:
-            d['citations_deduped'] = {}
-
-            with open(output_path, "a+", encoding='utf-8') as f:
-                f.write(json.dumps(d, ensure_ascii=False) + "\n")
-            print(f">>>>>>>>>> generating {d['id']}-th instance...")
-            continue
-            
-        # aggregate the citations by url
-        citations = d['citations']
-        citation_groups = {}
-        for _c in citations:
-            if _c['url'] not in citation_groups:
-                citation_groups[_c['url']] = []
-            citation_groups[_c['url']].append(_c)
-
-        citations_groups_deduped = {}
-
-        # Determine the language based on the id in the query data
-        article_id = d.get('id')
-        
-        if not article_id:
-            print(f"Article has no ID field, skipping deduplication")
-            continue
-            
-        if article_id not in id_to_lang_map:
-            print(f"Language not found for article ID: {article_id}")
-            continue
-            
-        lang = id_to_lang_map[article_id]
-        if lang not in ["zh", "en"]:
-            print(f"Unsupported language: {lang} for article ID: {article_id}")
-            continue
-
-        # deduplicate the citations by url
-        for ref_idx, group in citation_groups.items():
-            if len(group) == 1:
-                citations_groups_deduped[group[0]['url']] = {
-                    'facts': [group[0]['fact']],
-                    'url_content': None
-                }
-                continue
-
-            statements = '\n'.join([f'{i+1}. {_c["fact"]}' for i, _c in enumerate(group)])
-
-            # select the prompt based on the language
-            if lang == "zh":
-                user_prompt = prompt_template.format(statements=statements)
-            elif lang == 'en':
-                user_prompt = prompt_template_en.format(statements=statements)
-            
-            retries = 0
-
-            deduped_idx = []
-            while retries < 3:
-                retries += 1
+def deduplicate_report(d, id_to_lang_map, judge_model="google/gemini-3-flash-preview"):
+    d = dict(d)
+    d['id'] = str(d.get('id', ''))
+    d['dedup_model'] = resolve_openrouter_model(judge_model)
+    d.pop('dedup_error', None)
+    try:
+        raw_citations = d.get('citations')
+        if not isinstance(raw_citations, list):
+            raise ValueError('Citation extraction failed; rerun extraction first.')
+        # The reference index is extraction metadata, not needed for URL grouping.
+        citations = validate_citations([dict(item, ref_idx=item.get('ref_idx', 0)) for item in raw_citations])
+        language = id_to_lang_map[d['id']]
+        if language not in ('zh', 'en'):
+            raise ValueError(f'Unsupported language: {language}')
+    except Exception as exc:
+        d['citations_deduped'] = {}
+        d['dedup_error'] = str(exc)
+        return d, 1
+    groups = {}
+    for citation in citations:
+        groups.setdefault(citation['url'], []).append(citation)
+    deduped = {}
+    for url, group in groups.items():
+        indices = [1] if len(group) == 1 else None
+        if indices is None:
+            template = prompt_template if language == 'zh' else prompt_template_en
+            statements = '\n'.join(f'{index + 1}. {item["fact"]}' for index, item in enumerate(group))
+            for attempt in range(3):
                 try:
                     response = client.chat.completions.create(
-                        model="gemini-3-flash-preview",
-                        messages=[{"role": "user", "content": user_prompt}],
-                        max_tokens=65536
-                    )
-                    response = response.choices[0].message.content
-
-                    deduped_idx = json.loads(response.replace("```json", "").replace("```", ""))
-
+                        model=resolve_openrouter_model(judge_model),
+                        messages=[{'role': 'user', 'content': template.format(statements=statements)}],
+                        max_tokens=65536)
+                    if getattr(response.choices[0], 'finish_reason', None) in ('length', 'content_filter'):
+                        raise ValueError('Deduplication response did not finish normally')
+                    text = response.choices[0].message.content
+                    candidate = json.loads(text.replace('```json', '').replace('```', ''))
+                    if (not isinstance(candidate, list) or not candidate
+                            or any(type(index) is not int or not 1 <= index <= len(group) for index in candidate)
+                            or len(set(candidate)) != len(candidate)):
+                        raise ValueError('Invalid deduplication indices')
+                    indices = sorted(candidate)
                     break
-                except Exception as e:
-                    print(repr(e))
-                    continue
-            
-            # if the model failed to deduplicate, use the default deduplication
-            if not deduped_idx or 0 in deduped_idx or len(deduped_idx) > len(group):
-                deduped_idx = [i+1 for i in range(len(group))]
+                except Exception as exc:
+                    print(f'Deduplication error for {d["id"]}, attempt {attempt + 1}/3: {exc}')
+        if indices is None:
+            indices = list(range(1, len(group) + 1))
+            d['dedup_error'] = 'Semantic deduplication failed; all facts retained for retry.'
+        deduped[url] = {'facts': [group[index - 1]['fact'] for index in indices], 'url_content': None}
+    d['citations_deduped'] = deduped
+    return d, int(bool(d.get('dedup_error')))
 
-            # deduplicate the citations by url
-            citations_groups_deduped[group[0]['url']] = {
-                'facts': [group[i-1]['fact'] for i in deduped_idx],
-                'url_content': None
-            }
 
-        d['citations_deduped'] = citations_groups_deduped
+def run(data, output_path, id_to_lang_map, judge_model="google/gemini-3-flash-preview"):
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    failed = 0
+    with open(output_path, 'a', encoding='utf-8') as handle:
+        for item in data:
+            record, error = deduplicate_report(item, id_to_lang_map, judge_model)
+            failed += error
+            handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+            handle.flush()
+    return failed
 
-        with open(output_path, "a+", encoding='utf-8') as f:
-            f.write(json.dumps(d, ensure_ascii=False) + "\n")
-
-        print(f">>>>>>>>>> generating {d['id']}-th instance...") 
 
 if __name__ == '__main__':
-
-    # multiprocessing.set_start_method('fork')
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_path", type=str, required=True)
-    parser.add_argument("--raw_data_path", type=str, required=True)
-    parser.add_argument("--query_data_path", type=str, required=True, help="Path to query data with language information")
-    parser.add_argument("--n_total_process", type=int, default=1)
+    parser.add_argument('--output_path', required=True)
+    parser.add_argument('--raw_data_path', required=True)
+    parser.add_argument('--query_data_path', required=True)
+    parser.add_argument('--n_total_process', type=int, default=1)
+    parser.add_argument('--judge', default='google/gemini-3-flash-preview')
     args = parser.parse_args()
-    
-    output_path = args.output_path
-
-    raw_data = load_jsonl(args.raw_data_path)
-
-    # # 转换为列表格式
-    # raw_data = []
-    # for key, value in raw_data_dict.items():
-    #     # 将key作为id字段添加到值中
-    #     item = value.copy()  # 复制原值
-    #     item['id'] = key  # 添加id字段
-    #     raw_data.append(item)
-    
-    # Load the query data to get language information
+    if args.n_total_process < 1:
+        parser.error('--n_total_process must be at least 1')
     query_data = load_local_dataset(args.query_data_path)
-    query_data = [dict(zip(query_data.keys(), values)) for values in zip(*query_data.values())]
-    
-    # Create a mapping from ID to language
-    id_to_lang_map = {item['id']: item['language'] for item in query_data if 'id' in item}
-    
+    queries = [dict(zip(query_data.keys(), row)) for row in zip(*query_data.values())]
+    id_to_lang_map = {str(item['id']): item['language'] for item in queries}
     if not id_to_lang_map:
-        raise ValueError("No valid language information found in query data")
-
-    # if the output file exists, load the processed ids and filter out the processed instances
-    if os.path.exists(output_path):
-        predictions = []
-        with open(output_path, "r", encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    predictions.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-        processed = [d['id'] for d in predictions]
-        data_to_process = [d for d in raw_data if d['id'] not in processed]
-    else:
-        data_to_process = raw_data
-
-    print(f"Processing {len(data_to_process)} instances...")
-
-    n_total_process = args.n_total_process
-    if n_total_process == 1:
-        run(data_to_process, output_path, id_to_lang_map)
-    elif n_total_process > 1:
-        part_size = (len(data_to_process) + n_total_process - 1) // n_total_process
-        data_splits = [data_to_process[i * part_size : (i + 1) * part_size] for i in range(n_total_process)]
-        run_partial = partial(run, output_path=output_path, id_to_lang_map=id_to_lang_map)
-        with multiprocessing.Pool(processes=n_total_process) as pool:
-            results = pool.map(run_partial, data_splits)
+        raise ValueError('No valid language information found in query data')
+    raw_data = records_by_id(load_jsonl(args.raw_data_path))
+    missing = set(id_to_lang_map) - set(raw_data)
+    print(f'FACT input coverage: {len(set(raw_data) & set(id_to_lang_map))}/{len(id_to_lang_map)} reports; {len(missing)} missing.')
+    for identifier in missing:
+        raw_data[identifier] = {'id': identifier, 'citations': 'extraction failed',
+                                'extraction_error': 'Missing report in input'}
+    existing = records_by_id(load_jsonl(args.output_path)) if os.path.exists(args.output_path) else {}
+    successful = {identifier: existing[identifier] for identifier, item in raw_data.items()
+                  if identifier in existing and not existing[identifier].get('dedup_error')
+                  and existing[identifier].get('dedup_model') == resolve_openrouter_model(args.judge)
+                  and existing[identifier].get('citations') == item.get('citations')
+                  and valid_deduplication_cache(item, existing[identifier])}
+    write_jsonl(args.output_path, successful.values())
+    pending = [item for identifier, item in raw_data.items() if identifier not in successful]
+    print(f'Processing {len(pending)} reports...')
+    worker = partial(deduplicate_report, id_to_lang_map=id_to_lang_map, judge_model=args.judge)
+    failed = 0
+    pool = multiprocessing.Pool(args.n_total_process) if args.n_total_process > 1 else None
+    try:
+        results = pool.imap(worker, pending) if pool else map(worker, pending)
+        for record, error in results:
+            failed += error
+            successful[record['id']] = record
+            write_jsonl(args.output_path, successful.values())
+    finally:
+        if pool:
+            pool.close()
+            pool.join()
+    if failed:
+        print(f'Citation deduplication incomplete: {failed} report(s) failed; rerun to retry.')
+    sys.exit(1 if failed else 0)
