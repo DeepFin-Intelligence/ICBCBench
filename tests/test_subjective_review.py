@@ -46,28 +46,30 @@ class SubjectiveReviewTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def test_all_public_rubrics_and_known_question_36_conflict(self):
+    def test_all_public_rubrics_with_explicit_question_36_correction(self):
         questions = json.loads((ROOT / "data/subjective_questions_public_40.json").read_text())
-        valid, conflicts = [], []
         for question in questions:
-            try:
-                caps = expert.parse_criteria_dimensions(question["expert_evaluation_criteria"])
-                self.assertTrue(caps)
-                self.assertEqual(sum(caps.values()), 100)
-                valid.append(question["id"])
-            except ValueError as exc:
-                conflicts.append((question["id"], str(exc)))
-        self.assertEqual(len(valid), 39)
-        self.assertEqual(len(conflicts), 1)
-        self.assertEqual(conflicts[0][0], "36")
-        self.assertIn("36.0 != 30.0", conflicts[0][1])
+            criteria = question["expert_evaluation_criteria"]
+            caps = expert.parse_criteria_dimensions(criteria)
+            self.assertEqual(sum(caps.values()), 106 if question["id"] == "36" else 100)
+            self.assertEqual(expert.validate_dimension_scores(dimensions(criteria, 1), criteria), 100)
+            self.assertEqual(expert.validate_dimension_scores(dimensions(criteria, .5), criteria), 50)
 
-    def test_invalid_public_rubric_is_rejected_before_request(self):
+    def test_question_36_preserves_raw_scores_and_marks_correction(self):
         criteria = json.loads((ROOT / "data/subjective_questions_public_40.json").read_text())[35]["expert_evaluation_criteria"]
-        with patch.object(expert, "call_llm") as request:
-            with self.assertRaises(ValueError):
-                expert.evaluate_report_with_whole_criteria("report", criteria, "zh")
-            request.assert_not_called()
+        scores = dimensions(criteria, 1)
+        with patch.object(expert, "call_llm", return_value=json.dumps(scores)) as request:
+            result = expert.evaluate_report_with_whole_criteria("report", criteria, "zh")
+        self.assertEqual(result["raw_total_score"], 106)
+        self.assertEqual(result["total_score"], 100)
+        self.assertEqual(result["dimensions_breakdown"], scores)
+        self.assertEqual(result["scoring_adjustments"][0]["factor"], 30 / 36)
+        self.assertIn("Do not normalize", request.call_args.args[0][0]["content"])
+        with self.assertRaises(ValueError):
+            expert.parse_criteria_dimensions(criteria + " Modified rubric")
+        scores[-1]["score"] = 999
+        with self.assertRaises(ValueError):
+            expert.validate_dimension_scores(scores, criteria)
 
     def test_fractional_dimension_scores_are_preserved(self):
         scores = [{"dimension_id": "1.1", "score": 30.25}, {"dimension_id": "1.2", "score": 40.5}]

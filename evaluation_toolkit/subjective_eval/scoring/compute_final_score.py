@@ -32,6 +32,8 @@ def compute_final_score(expert_csvs, fact_csv, output_csv, alpha, beta, gamma):
 
     expert_csvs: list of paths to ExpertCriteria leaderboard CSVs
     """
+    if len({str(Path(path).resolve()) for path in expert_csvs}) != len(expert_csvs):
+        raise ValueError("Expert rounds must use distinct CSV files")
     weights = (alpha, beta, gamma)
     if any(not math.isfinite(weight) or weight < 0 for weight in weights) or not math.isclose(sum(weights), 1):
         raise ValueError("Final score weights must be finite, nonnegative, and sum to 1")
@@ -81,11 +83,12 @@ def compute_final_score(expert_csvs, fact_csv, output_csv, alpha, beta, gamma):
         raise ValueError(f"FACT scores are missing for models: {sorted(missing_models)}")
     check_matching_inputs(df_expert, df_fact, fact_csv)
 
-    # 4. Merge by normalized model name (using ExpertCriteria as base, fill 0 for missing FACT models)
+    time_columns = ['Evaluation As Of (UTC)'] if 'Evaluation As Of (UTC)' in df_fact else []
+    # 4. Merge validated inputs by normalized model name
     df_merged = pd.merge(
         df_expert[['Model', 'Avg Score', '_norm_model', 'Total Tasks',
                    'Task Set Fingerprint', 'Report Set Fingerprint']],
-        df_fact[['Model Name', 'Avg Citation Score (Macro)', 'Avg Source Quality Score (S_source)', '_norm_model']],
+        df_fact[['Model Name', 'Avg Citation Score (Macro)', 'Avg Source Quality Score (S_source)', '_norm_model'] + time_columns],
         on='_norm_model',
         how='left',
         suffixes=('', '_fact')
@@ -93,10 +96,6 @@ def compute_final_score(expert_csvs, fact_csv, output_csv, alpha, beta, gamma):
 
     if df_merged.empty:
         raise ValueError("Expert CSV contains no models")
-
-    # Fill 0 for models missing in FACT
-    df_merged['Avg Citation Score (Macro)'] = df_merged['Avg Citation Score (Macro)'].fillna(0)
-    df_merged['Avg Source Quality Score (S_source)'] = df_merged['Avg Source Quality Score (S_source)'].fillna(0)
 
     # 5. Compute final score
     df_merged['S_expert'] = df_merged['Avg Score']
@@ -115,8 +114,9 @@ def compute_final_score(expert_csvs, fact_csv, output_csv, alpha, beta, gamma):
         'S_citation',
         'S_source',
         'S_final', 'Total Tasks', 'Task Set Fingerprint', 'Report Set Fingerprint'
-    ]].copy()
+    ] + time_columns].copy()
     df_out['Provenance Verified'] = True
+    df_out['Expert Rounds'] = len(expert_csvs)
 
     # Sort by S_final descending
     df_out = df_out.sort_values(by='S_final', ascending=False).reset_index(drop=True)
@@ -212,6 +212,8 @@ def run_all_versions(expert_dirs, fact_csv_base, output_dir, alpha, beta, gamma)
             if os.path.exists(p):
                 expert_csvs.append(p)
 
+        if expert_csvs and len(expert_csvs) != len(expert_dirs):
+            raise FileNotFoundError(f"Missing ExpertCriteria round for language {lang or 'ALL'}")
         if not expert_csvs:
             print(f"Skip: No Expert CSV found (lang={lang})")
             continue
@@ -282,7 +284,7 @@ if __name__ == "__main__":
         fact_csv_lang = fact_csv.replace('.csv', f'_{args.language_filter}.csv')
         fact_csv = fact_csv_lang
 
-        if expert_csvs and os.path.exists(fact_csv):
+        if len(expert_csvs) == len(args.expert_dirs) and expert_csvs and os.path.exists(fact_csv):
             compute_final_score(expert_csvs, fact_csv, output_csv, args.alpha, args.beta, args.gamma)
         else:
             raise FileNotFoundError(f"Input files do not exist. Expert={expert_csvs}, FACT={fact_csv}")

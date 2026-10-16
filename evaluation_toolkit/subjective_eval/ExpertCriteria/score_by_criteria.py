@@ -13,6 +13,7 @@ import json
 import re
 import time
 import math
+import hashlib
 import unicodedata
 from evaluation_toolkit.model_clients import *
 import argparse
@@ -26,11 +27,24 @@ from evaluation_toolkit.subjective_eval.scoring.provenance import question_finge
 client = OPENROUTER
 
 
+# Author-approved correction; match the exact released rubric, never a task ID alone.
+RUBRIC_36_SHA256 = "1ef84615f6f9c79668016ffc7ba10510691568ad032254874e2dbbc170d7e84f"
+
+
+def scoring_adjustments(criteria_text):
+    if hashlib.sha256(criteria_text.encode("utf-8")).hexdigest() != RUBRIC_36_SHA256:
+        return []
+    return [{"policy": "public-subjective-36-primary-2-v1", "primary_dimension": "2",
+             "raw_maximum": 36, "normalized_maximum": 30, "factor": 30 / 36,
+             "reason": "Preserve original rubric; scale primary dimension 2 from 36 to 30 points."}]
+
+
 def parse_criteria_dimensions(criteria_text):
     """Read the numbered Markdown dimensions and point caps in public rubrics.
 
     Unstructured custom rubric text returns an empty mapping. A rubric containing
-    numbered dimension headings must be completely parseable and total 100.
+    numbered headings must total 100 after explicitly registered corrections.
+    Returned caps are always RAW caps used by the judge.
     """
     if not isinstance(criteria_text, str):
         raise ValueError("Scoring criteria must be text")
@@ -62,12 +76,16 @@ def parse_criteria_dimensions(criteria_text):
             if dimension_id in dimensions:
                 raise ValueError(f"Duplicate dimension {dimension_id} in scoring criteria")
             dimensions[dimension_id] = cap
+    adjustments = {a["primary_dimension"]: a for a in scoring_adjustments(criteria_text)}
     if primary_caps:
         for primary, cap in primary_caps.items():
             subtotal = sum(v for k, v in dimensions.items() if k.split(".")[0] == primary)
+            adjustment = adjustments.get(primary)
+            if adjustment and subtotal == adjustment["raw_maximum"] and cap == adjustment["normalized_maximum"]:
+                continue
             if not math.isclose(subtotal, cap):
                 raise ValueError(f"Incomplete scoring criteria for primary dimension {primary}: {subtotal} != {cap}")
-        if not math.isclose(sum(dimensions.values()), 100):
+        if not math.isclose(sum(primary_caps.values()), 100):
             raise ValueError("Scoring criteria dimension limits must total 100")
     return dimensions
 
@@ -77,7 +95,8 @@ def validate_dimension_scores(dimension_scores, eval_criteria):
         raise ValueError("Judge must return a nonempty JSON array of dimension scores")
     limits = parse_criteria_dimensions(eval_criteria)
     seen = set()
-    total = 0
+    factors = {a["primary_dimension"]: a["factor"] for a in scoring_adjustments(eval_criteria)}
+    weighted_scores = []
     for dimension in dimension_scores:
         if not isinstance(dimension, dict):
             raise ValueError("Each dimension score must be a JSON object")
@@ -95,9 +114,10 @@ def validate_dimension_scores(dimension_scores, eval_criteria):
         cap = limits.get(dimension_id, 100)
         if score < 0 or score > cap:
             raise ValueError(f"Dimension {dimension_id} score must be between 0 and {cap}")
-        total += score
+        weighted_scores.append(score * factors.get(dimension_id.split(".")[0], 1))
     if limits and seen != set(limits):
         raise ValueError(f"Missing score dimensions: {sorted(set(limits) - seen)}")
+    total = round(math.fsum(weighted_scores), 12)
     if not math.isfinite(total) or total > 100:
         raise ValueError("Total expert score must be between 0 and 100")
     return total
@@ -109,7 +129,7 @@ def score_fingerprint(question, report, judge):
     return fingerprint({"judge": judge, "question": question.get("question_en") or question.get("question"),
                         "report": report["response"], "report_model": report["model"],
                         "prompt": format_whole_prompt(criteria, report["response"], language),
-                        "dimension_limits": parse_criteria_dimensions(criteria), "schema_version": 2})
+                        "dimension_limits": parse_criteria_dimensions(criteria), "scoring_adjustments": scoring_adjustments(criteria), "schema_version": 3})
 
 def format_whole_prompt(criteria_text, report_text, q_language):
     prompt_template_zh = f"""你是一位极其严苛的金融研究报告资深评审专家。你的任务是仔细阅读【研究报告】，对照【评分标准】进行极其严格的量化评估。
@@ -296,6 +316,9 @@ def evaluate_report_with_whole_criteria(report_text, eval_criteria, q_language):
     if limits:
         eval_prompts += "\nRequired dimension_id values and maximum scores (return every ID exactly once):\n" + json.dumps(limits, ensure_ascii=False)
 
+    if scoring_adjustments(eval_criteria):
+        eval_prompts += "\nScore every secondary dimension on its ORIGINAL point scale. Do not normalize the scores: the evaluator scales primary dimension 2 by 30/36 after validation."
+
     if eval_prompts:
         # print("Evaluation prompt constructed")
         messages = [
@@ -317,6 +340,8 @@ def evaluate_report_with_whole_criteria(report_text, eval_criteria, q_language):
 
     eval_result['total_score'] = validate_dimension_scores(dimension_scores, eval_criteria)
     eval_result["dimensions_breakdown"] = dimension_scores
+    eval_result["raw_total_score"] = math.fsum(d["score"] for d in dimension_scores)
+    eval_result["scoring_adjustments"] = scoring_adjustments(eval_criteria)
 
     return eval_result
 

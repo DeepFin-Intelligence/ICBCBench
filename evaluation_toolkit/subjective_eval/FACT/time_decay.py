@@ -9,7 +9,7 @@ import json
 import argparse
 import math
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from tqdm import tqdm
 from dateutil import parser as date_parser  # Powerful time parsing library
 from evaluation_toolkit.subjective_eval.FACT.utils import *
@@ -19,47 +19,41 @@ from evaluation_toolkit.subjective_eval.FACT.utils import *
 # Core calculation functions
 # ==========================================
 
-def calculate_time_score(publish_time_str, alpha=0.002):
+def reference_time(as_of=None):
+    """Resolve a frozen UTC reference; ISO dates denote midnight UTC."""
+    if as_of is None:
+        return datetime.now(timezone.utc)
+    try:
+        value = as_of if isinstance(as_of, datetime) else date_parser.isoparse(as_of)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("as_of must be an ISO date or datetime, e.g. 2026-10-16") from exc
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def calculate_time_score(publish_time_str, alpha=0.002, as_of=None):
+    """exp(-alpha * age in whole UTC days); unknown dates return -1.
+
+    Partial publication dates use January 1 / day 1 for missing components.
+    Future dates have age zero, consistent with the original scoring convention.
     """
-    Calculate time decay score based on publication time.
-    Formula: Score = e^(-alpha * (T_curr - T_pub))
-    Unit: days
-    """
-    # 1. If no publication time, return None or default score
     if not math.isfinite(alpha) or alpha < 0:
         raise ValueError('alpha must be a finite nonnegative number')
+    current = reference_time(as_of)
     if not publish_time_str:
         return -1
-
     try:
-        # 2. Parse time string
-        # fuzzy=True handles non-standard strings like "Published: 2023-10-01"
-        pub_time = date_parser.parse(str(publish_time_str), fuzzy=True)
-
-        # Remove timezone info for comparison (or convert to UTC; here simplified to naive time)
-        pub_time = pub_time.replace(tzinfo=None)
-        curr_time = datetime.now().replace(tzinfo=None)
-
-        # 3. Calculate day difference
-        delta = curr_time - pub_time
-        days_diff = delta.days
-
-        # If publication time is in the future (dirty data), treat as 0 days
-        if days_diff < 0:
-            days_diff = 0
-
-        # 4. Exponential decay formula
-        score = math.exp(-alpha * days_diff)
-
-        return round(score, 4)
-
-    except Exception as e:
-        # Parse failed, return default score, log optionally
-        # print(f"Time parse error: {e} | Raw string: {publish_time_str}")
+        published = date_parser.parse(str(publish_time_str), fuzzy=True,
+                                      default=datetime(1970, 1, 1, tzinfo=timezone.utc))
+        published = reference_time(published)
+        days = max(0, (current - published).days)
+        return round(math.exp(-alpha * days), 4)
+    except (ValueError, TypeError, OverflowError):
         return -1
 
 
-def process_citation_time(citation_item, alpha):
+def process_citation_time(citation_item, alpha, as_of=None):
     """
     Process a single citation item, compatible with validate.py data structure
     citation_item: (url, data_dict)
@@ -69,7 +63,7 @@ def process_citation_time(citation_item, alpha):
 
     publish_time = data_dict.get('publish_time')
 
-    score = calculate_time_score(publish_time, alpha)
+    score = calculate_time_score(publish_time, alpha, as_of)
 
     return {
         "url": url,
@@ -83,13 +77,15 @@ def process_citation_time(citation_item, alpha):
 # ==========================================
 
 
-def save_time_score(data_list, save_path, alpha):
+def save_time_score(data_list, save_path, alpha, as_of=None):
+    as_of = reference_time(as_of).isoformat()
     if not math.isfinite(alpha) or alpha < 0:
         raise ValueError('alpha must be a finite nonnegative number')
     print(f"Processing {len(data_list)} documents for time decay evaluation...")
     for record in tqdm(data_list):
+        record['evaluation_as_of_utc'] = as_of
         for citation in record.get('citations_deduped', {}).values():
-            citation['time_decay_score'] = calculate_time_score(citation.get('publish_time'), alpha)
+            citation['time_decay_score'] = calculate_time_score(citation.get('publish_time'), alpha, as_of)
     write_jsonl(save_path, data_list)
     print(f"Done! Results saved to {save_path}")
 
@@ -99,5 +95,6 @@ if __name__ == '__main__':
     parser.add_argument("--input_path", required=True, help="Raw or validated JSONL file")
     parser.add_argument("--output_path", required=True, help="Output JSONL with time scores")
     parser.add_argument("--alpha", type=float, default=0.002, help="Decay rate per day")
+    parser.add_argument("--as_of", help="Frozen evaluation date/datetime in ISO format (UTC by default)")
     args = parser.parse_args()
-    save_time_score(load_jsonl(args.input_path), args.output_path, args.alpha)
+    save_time_score(load_jsonl(args.input_path), args.output_path, args.alpha, args.as_of)

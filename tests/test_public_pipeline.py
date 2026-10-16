@@ -57,7 +57,7 @@ class PublicPipelineTests(unittest.TestCase):
                         compute_final_score([str(expert_path)], str(fact_path), str(base / 'final.csv'), .8, .1, .1)
                     self.assertFalse((base / 'final.csv').exists())
 
-    def test_all_40_subjective_questions_preserve_39_scores_and_report_rubric_conflict(self):
+    def test_all_40_subjective_questions_score_and_resume_with_corrected_rubric(self):
         http = importlib.import_module('httpx2' if int(openai.__version__.split('.')[0]) >= 3 else 'httpx')
         questions = json.loads((ROOT / 'data/subjective_questions_public_40.json').read_text())
         calls = []
@@ -102,20 +102,22 @@ class PublicPipelineTests(unittest.TestCase):
                                       report_dir=str(base / 'reports'), output_dir=str(base / 'scores'),
                                       max_workers=4, max_samples=None)
             with patch.object(expert, 'client', sdk):
-                self.assertEqual(expert.main(options), 1)
-                self.assertEqual(expert.main(options), 1)
-            self.assertEqual(len(calls), 79)
+                self.assertEqual(expert.main(options), 0)
+                self.assertEqual(expert.main(options), 0)
+            self.assertEqual(len(calls), 80)
             scores_dir = base / 'scores/judge_gpt-5.4'
             scores = [json.loads(line) for line in (scores_dir / 'scores_gpt-4o.jsonl').read_text().splitlines()]
-            self.assertEqual(len(scores), 39)
-            self.assertNotIn('36', {score['task_id'] for score in scores})
-            self.assertIn('36.0 != 30.0', output.getvalue())
+            self.assertEqual(len(scores), 40)
+            corrected = next(score for score in scores if score['task_id'] == '36')
+            self.assertAlmostEqual(corrected['raw_total_score'], 84.8)
+            self.assertEqual(corrected['total_score'], 80)
+            self.assertTrue(corrected['scoring_adjustments'])
             expert_stat.stat(str(scores_dir), dataset, str(base / 'expert.csv'))
             with (base / 'expert.csv').open(encoding='utf-8-sig') as stream:
                 row = next(csv.DictReader(stream))
             self.assertEqual(int(row['Total Tasks']), 40)
-            self.assertEqual(int(row['Evaluated Tasks']), 39)
-            self.assertEqual(float(row['Coverage (%)']), 97.5)
+            self.assertEqual(int(row['Evaluated Tasks']), 40)
+            self.assertEqual(float(row['Coverage (%)']), 100)
 
     def test_all_80_objective_questions_real_sdk_prediction_judging_and_metrics(self):
         # Select the HTTP runtime actually used by this installed OpenAI version.

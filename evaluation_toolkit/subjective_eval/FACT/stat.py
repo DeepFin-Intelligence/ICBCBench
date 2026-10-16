@@ -191,7 +191,7 @@ def time_decay_evaluate(data, args, id_to_lang, temp_timed_path=None):
 
     if temp_timed_path is None:
         temp_timed_path = os.path.join(tempfile.gettempdir(), 'finhle_temp_timed.jsonl')
-    save_time_score(data, temp_timed_path, alpha)
+    save_time_score(data, temp_timed_path, alpha, getattr(args, "as_of", None))
 
     timed_data = load_jsonl(temp_timed_path)
 
@@ -283,7 +283,7 @@ def source_evaluate(data, args, id_to_lang):
             auth_score = authority.get_authority_weight(true_url)
 
             publish_time = c.get('publish_time')
-            time_score = calculate_time_score(publish_time, alpha=0.002)
+            time_score = calculate_time_score(publish_time, alpha=0.002, as_of=getattr(args, "as_of", None))
             # Unknown dates and failed sources stay in the URL denominator.
             # Authority is meaningful independently of date availability.
             time_score = max(0, time_score)
@@ -351,6 +351,7 @@ def filter_data_by_language(data, language_filter, id_to_lang):
 def run_stat(args, id_to_lang, output_csv, language_filter, query_records=None):
     """Run one round of statistics and write to CSV"""
     # Temporarily set language filter
+    args.as_of = reference_time(getattr(args, "as_of", None)).isoformat()
     original_filter = getattr(args, 'language_filter', None)
     args.language_filter = language_filter
     if not isinstance(args.model_name, str) or not args.model_name.strip():
@@ -408,6 +409,7 @@ def run_stat(args, id_to_lang, output_csv, language_filter, query_records=None):
     # 4. Assemble wide table format (one row per model)
     row = {
         "Model Name": args.model_name,
+        "Evaluation As Of (UTC)": args.as_of,
         "Total Tasks": fact_res.get("Total Tasks", 0),
         "Evaluated Tasks": evaluated_tasks,
         "Coverage (%)": coverage,
@@ -432,7 +434,7 @@ def run_stat(args, id_to_lang, output_csv, language_filter, query_records=None):
     with os.fdopen(fd, mode='w', newline='', encoding='utf-8') as f:
         fieldnames = ["Model Name", "Total Tasks", "Evaluated Tasks", "Coverage (%)", "Avg Citation Score (Macro)",
                       "Avg Source Authority Score (S_auth)", "Avg Source Timeliness Score (S_time)",
-                      "Avg Source Quality Score (S_source)", "Task Set Fingerprint", "Report Set Fingerprint", "Provenance Verified"]
+                      "Avg Source Quality Score (S_source)", "Task Set Fingerprint", "Report Set Fingerprint", "Provenance Verified", "Evaluation As Of (UTC)"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
 
         writer.writeheader()
@@ -460,6 +462,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_csv", type=str, required=True)
     parser.add_argument("--query_file", type=str, default=default_query_file, help="Path to the question JSONL file")
     parser.add_argument("--language_filter", type=str, required=False)
+    parser.add_argument("--as_of", help="Frozen ISO evaluation date/datetime for source timeliness")
     args = parser.parse_args()
     if args.language_filter not in (None, 'zh', 'en'):
         parser.error('--language_filter must be zh or en')
@@ -480,7 +483,7 @@ if __name__ == "__main__":
         # Default: run all three versions (consistent with ExpertCriteria/stat.py)
         base, ext = os.path.splitext(args.output_csv)
         failed = 0
-        for lang in [None, "zh", "en"]:
+        for lang in [None] + sorted(set(id_to_lang.values())):
             if lang:
                 output_csv = f"{base}_{lang}{ext}"
             else:

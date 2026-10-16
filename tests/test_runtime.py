@@ -147,13 +147,6 @@ class RuntimeTests(unittest.TestCase):
             self.assertIn(q['question'],messages[1]['content'])
         for q in SUBJECTIVE:
             with self.subTest(task_id=q['id']), patch.object(score_by_criteria,'call_llm') as call:
-                if q['id'] == '36':
-                    result, message = score_by_criteria.process_single_report(q['id'],{'response':'report','model':'gpt-4o'},
-                                SimpleNamespace(report_model='gpt-4o',judge='gpt-5.4'),{q['id']:q})
-                    self.assertIsNone(result)
-                    self.assertIn('36.0 != 30.0', message)
-                    call.assert_not_called()
-                    continue
                 call.return_value = expert_scores(q)
                 result, _=score_by_criteria.process_single_report(q['id'],{'response':'report','model':'gpt-4o'},
                             SimpleNamespace(report_model='gpt-4o',judge='gpt-5.4'),{q['id']:q})

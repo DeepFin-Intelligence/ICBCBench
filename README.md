@@ -49,16 +49,73 @@ evaluation_toolkit/
 
 ## Installation
 
-The full offline suite is verified with Python 3.12.13. Use a separate virtual
-environment and install the declared API SDK versions before running evaluation.
+Use **Python 3.12** (verified locally with 3.12.13) and an isolated environment.
+The commands below select the `Zhiwei` release branch:
 
 ```bash
-pip install -r requirements.txt
+git clone --branch Zhiwei https://github.com/DeepFin-Intelligence/ICBCBench.git
+cd ICBCBench
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-lock.txt
+python -m pip check
+python -m evaluation_toolkit check
 ```
 
-> Note: `subjective_eval/FACT/scrape.py` depends on `curl_cffi`.
-> The official Tavily SDK is `tavily-python`. If an older environment has the
-> unrelated `tavily` package installed, uninstall it before reinstalling requirements.
+On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell.
+`requirements-lock.txt` pins the tested direct and transitive dependencies;
+`requirements.txt` lists minimum/direct requirements for development. The
+Tavily SDK package is `tavily-python`, not the unrelated `tavily` package.
+
+## Quick Start
+
+First verify scoring and aggregation without API keys or network access:
+
+```bash
+python -m evaluation_toolkit demo --output_dir eval_result/offline_demo
+python -m unittest discover -s tests -v
+```
+
+The demo writes explicitly **synthetic** bilingual inputs, per-task scores,
+three expert rounds, citation metrics and final CSVs. Expected synthetic results:
+objective accuracy **50%**, subjective final score **74.00**. It tests scoring and
+aggregation, not live generation or model performance. Use an empty output folder.
+
+For live evaluation, configure the keys below, then preview a two-task-per-track
+run. The date is an explicit reference date for source timeliness; choose and
+report the date appropriate to your experiment.
+
+```bash
+python -m evaluation_toolkit check --model gpt-4o
+python -m evaluation_toolkit run \
+    --model gpt-4o --track both --limit 2 \
+    --expert_rounds 3 --as_of 2026-10-16 \
+    --run_dir eval_result/gpt4o-smoke --dry_run
+```
+
+Remove `--dry_run` to execute the plan (**paid provider calls and source downloads**).
+For all 80 objective and 40 subjective tasks, omit `--limit` and use a new run
+folder. `--language en` or `--language zh` restricts the task set. Bilingual small
+runs alternate English and Chinese tasks, preserving original IDs. Every stage
+uses the same saved subset, so coverage and averages have the correct denominator.
+
+The runner executes prediction/judging/metrics and report generation, **three
+independent expert scoring passes**, FACT and final aggregation. Inspect:
+
+- `RUN_DIR/objective/metrics/evaluation_results.csv` and language-specific CSVs;
+- `RUN_DIR/subjective/expert_round_*/judge_gemini-3.1-pro/scores_gpt-4o.jsonl` for per-task raw and normalized expert scores;
+- `RUN_DIR/subjective/final_leaderboard.csv`, `final_leaderboard_en.csv`, `final_leaderboard_zh.csv`;
+- `RUN_DIR/run_manifest.json`, `inputs/` and `logs/` for configuration, dependencies, frozen task subsets and stage logs.
+
+Only languages present in the subset produce language-specific results. On a
+stage failure the runner stops and retains successful records; rerun the same
+command to resume. Only a manifest with `status: complete` represents a finished
+run; earlier CSVs may still exist after an interrupted attempt. A changed model, judge, task set, date, code or dependency
+version requires a new run folder. Run one process per output folder.
+Use `--objective_judge`, `--expert_judge`, and `--fact_judge` to select judges;
+defaults are `gpt-5.4`, `gemini-3.1-pro`, and `google/gemini-3-flash-preview`.
+A fresh run reproduces this release's evaluation procedure, not necessarily the
+historical Table 1 numbers. See [reproduction conventions](docs/REPRODUCIBILITY.md).
 
 ## Environment Variables
 
@@ -211,23 +268,27 @@ python evaluation_toolkit/subjective_eval/write.py \
 
 Outputs: `eval_result/subjective_eval/dr_reports/reports_gpt-4o.json`
 
-### 2. ExpertCriteria Scoring
+### 2–3. ExpertCriteria Scoring and Aggregation
+
+Keep each of the three scoring rounds in its own directory; rerunning a scorer
+in the same directory resumes its cache rather than creating another round.
+The unified runner above handles this automatically. Equivalent Bash commands:
 
 ```bash
-python evaluation_toolkit/subjective_eval/ExpertCriteria/score_by_criteria.py \
-    --judge gemini-3.1-pro \
-    --report_model gpt-4o
-```
-
-Outputs: `eval_result/subjective_eval/scores/judge_<judge>/scores_gpt-4o.jsonl`
-
-### 3. Aggregate ExpertCriteria Scores
-
-```bash
-python evaluation_toolkit/subjective_eval/ExpertCriteria/stat.py \
-    --input_dir eval_result/subjective_eval/scores/judge_<judge> \
-    --query_file data/subjective_questions_public_40.json \
-    --output_csv eval_result/subjective_eval/scores/judge_<judge>/leaderboard.csv
+for round in 1 2 3; do
+    python evaluation_toolkit/subjective_eval/ExpertCriteria/score_by_criteria.py \
+        --judge gemini-3.1-pro --report_model gpt-4o \
+        --output_dir "eval_result/subjective_eval/expert_round_${round}" || exit 1
+    for language in all en zh; do
+        filter=()
+        if [ "$language" != all ]; then filter=(--language_filter "$language"); fi
+        python evaluation_toolkit/subjective_eval/ExpertCriteria/stat.py \
+            --input_dir "eval_result/subjective_eval/expert_round_${round}/judge_gemini-3.1-pro" \
+            --query_file data/subjective_questions_public_40.json \
+            --output_csv "eval_result/subjective_eval/expert_round_${round}/judge_gemini-3.1-pro/leaderboard.csv" \
+            "${filter[@]}" || exit 1
+    done
+done
 ```
 
 ### 4. FACT Evaluation
@@ -264,14 +325,16 @@ python evaluation_toolkit/subjective_eval/FACT/stat.py \
     --model_name gpt-4o \
     --input_path eval_result/subjective_eval/fact/validated_gpt-4o.jsonl \
     --output_csv eval_result/subjective_eval/fact_result.csv \
-    --query_file data/subjective_questions_public_40.json
+    --query_file data/subjective_questions_public_40.json --as_of 2026-10-16
 ```
 
 ### 5. Compute Final Score
 
 ```bash
 python evaluation_toolkit/subjective_eval/scoring/compute_final_score.py \
-    --expert_dirs eval_result/subjective_eval/scores/judge_<judge> \
+    --expert_dirs eval_result/subjective_eval/expert_round_1/judge_gemini-3.1-pro \
+                  eval_result/subjective_eval/expert_round_2/judge_gemini-3.1-pro \
+                  eval_result/subjective_eval/expert_round_3/judge_gemini-3.1-pro \
     --fact_csv eval_result/subjective_eval/fact_result.csv \
     --output_dir eval_result/subjective_eval \
     --alpha 0.8 --beta 0.1 --gamma 0.1
@@ -288,7 +351,9 @@ S_final = alpha * S_expert + beta * S_citation + gamma * S_source
 ## Notes
 
 - All scripts can be run directly or as modules (`python -m evaluation_toolkit.objective_eval.predict ...`).
-- Use `--max_samples` to limit the number of samples during testing.
+- Prefer the unified runner’s `--limit` for small complete evaluations. Individual
+  scripts’ `--max_samples` limits generation/scoring only; downstream aggregation
+  must receive a matching subset JSON or it will correctly report incomplete coverage.
 - Set `--num_workers` / `--max_workers` according to your API rate limit.
 - The FACT pipeline expects `citations_deduped` in the input data with fields such as `facts`, `validate_res`, `publish_time`, and `true_url`.
 - Prediction, report generation, expert scoring, and FACT model stages return a nonzero exit status when tasks fail. Successful records are saved for retry.
@@ -327,11 +392,14 @@ S_final = alpha * S_expert + beta * S_citation + gamma * S_source
   give inconsistent image schemas; this client uses the text API contract.
 - `JINA_API_KEY` is optional for FACT scraping. Without it, or after Jina fails,
   the scraper uses its local HTML/PDF extraction path.
-- Public subjective question **36** has an inconsistent rubric: primary dimension
-  2 declares 30 points, but its five secondary dimensions total 36, making the
-  full rubric 106 instead of 100. Scoring rejects it before calling a model and
-  preserves the other results. The public rubric must be clarified before a
-  complete 40-question subjective leaderboard can be produced.
+- Public subjective question **36** retains its original rubric. Primary dimension
+  2 declares 30 points but its secondary items total 36. The author-approved
+  convention scores those items on their original scales, then multiplies their
+  sum by **30/36**. Other primary dimensions are unchanged. JSONL scores retain
+  `dimensions_breakdown`, `raw_total_score`, `total_score` and `scoring_adjustments`.
+  The correction is bound to the exact released rubric hash; other malformed
+  rubrics still fail validation. This convention is explicitly different from
+  uncorrected historical scoring; see [details](docs/REPRODUCIBILITY.md).
 - Additional public-data issues require author clarification: objective questions
   44, 51, and 53 refer to unspecified reports that are not attached; question 62
   lacks a target P/EV assumption; question 53's requested output layout conflicts
@@ -349,7 +417,7 @@ python -m unittest discover -s tests -v
 
 These checks use real SDKs with local HTTP transports, real HTML/PDF extraction,
 and simulated service responses. They cover all 80 objective questions, all 40
-subjective questions (including the known rubric conflict), bilingual data,
+subjective questions (including the explicit task 36 correction), bilingual data,
 images, interrupted runs, cache invalidation, malformed responses, multiprocessing,
 and final-score aggregation. They do not use live API keys or generate benchmark scores.
 
