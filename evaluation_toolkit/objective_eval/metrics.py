@@ -84,6 +84,31 @@ def valid_judge_result(result):
             and 0 <= result["confidence"] <= 100)
 
 
+def prediction_model_name(records, fallback):
+    """Preserve a complete tested-model identity; use filenames for legacy data.
+
+    Aliases of one known model may coexist, in which case use their canonical
+    name for a stable label. Different namespaces sharing a basename are still
+    different models and must never be combined into one metric row.
+    """
+    names = set()
+    for record in records.values():
+        if not isinstance(record, dict) or "model" not in record:
+            continue
+        model = record["model"]
+        if not isinstance(model, str) or not model.strip() or model != model.strip():
+            raise ValueError("Prediction model names must be nonempty strings without surrounding whitespace")
+        names.add(model)
+    canonical_names = {resolve_openrouter_model(name) for name in names}
+    if len(canonical_names) > 1:
+        raise ValueError("Predictions contain multiple models; provide one model per prediction file")
+    if len(names) == 1:
+        return next(iter(names))
+    if canonical_names:
+        return next(iter(canonical_names))
+    return fallback
+
+
 def calib_err(confidence, correct, p="2", beta=10):
     confidence, correct = np.asarray(confidence, dtype=float), np.asarray(correct, dtype=float)
     if len(confidence) != len(correct):
@@ -198,7 +223,9 @@ def dump_all_metrics(judge_model, language_filter, multimodal_ids=None,
         stale = sum(str(key) in selected_ids and str(key) not in selected for key in results)
         if stale:
             print(f"{path.name}: ignored {stale} invalid or stale judgment(s); rerun judge.py for the current dataset and judge.")
-        model_name = path.stem.removeprefix("judged_")
+        model_name = prediction_model_name(
+            {str(key): entry for key, entry in results.items() if str(key) in selected_ids},
+            path.stem.removeprefix("judged_"))
         summary = dump_metrics(model_name, judge_model, selected, len(selected_ids), output)
         incomplete |= summary["Evaluated"] != summary["Total"]
     return int(incomplete)

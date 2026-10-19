@@ -22,6 +22,10 @@ from evaluation_toolkit.subjective_eval.prompts import *
 from evaluation_toolkit.model_clients import *
 from evaluation_toolkit.DR_clients import *
 from evaluation_toolkit.subjective_eval.runtime import atomic_save, valid_report, fingerprint, validate_questions
+from evaluation_toolkit.generation import (
+    add_generation_arguments, generation_config, validate_generation_credentials,
+    generate_custom, generation_model_name, model_backend,
+)
 
 
 client = OPENROUTER
@@ -32,7 +36,7 @@ def format_message(topic):
     content = f"用户的研究请求：{user_topic}" if language == "zh" else f"User's Research Query: {user_topic}"
     SYSTEM_PROMPT = WRITING_PROMPT_ZH if language == "zh" else WRITING_PROMPT_EN
 
-    system_role = "model" if "gemini-deep-research" in args.model else "system"  # o1 no sys prompt
+    system_role = "model" if model_backend(args) == "builtin" and "gemini-deep-research" in args.model else "system"
     messages = [
         {"role": system_role, "content": SYSTEM_PROMPT},
         {"role": "user", "content": content}
@@ -41,9 +45,9 @@ def format_message(topic):
 
 
 def request_fingerprint(topic):
-    return fingerprint({"model": resolve_openrouter_model(args.model), "messages": format_message(topic),
+    return fingerprint({"model": generation_model_name(args), "generation": generation_config(args), "messages": format_message(topic),
                         "max_tokens": getattr(args, "max_completion_tokens", None), "temperature": getattr(args, "temperature", 0.0),
-                        "schema_version": 2})
+                        "schema_version": 3})
 
 
 def attempt_query(topic):
@@ -51,8 +55,14 @@ def attempt_query(topic):
     metadata = None
 
     try:
-        dr_client = create_dr_client(args.model)
-        if dr_client is not None:
+        dr_client = create_dr_client(args.model) if model_backend(args) == "builtin" else None
+        if model_backend(args) != "builtin":
+            response = generate_custom(args, task_id=topic["id"], track="subjective",
+                                       language=topic["language"], messages=messages)
+            content = response["content"]
+            tokens = response["usage"]
+            metadata = {"provider_citations": response["citations"]}
+        elif dr_client is not None:
             dr_client.cancel_event = getattr(args, "research_cancel_event", None)
             response = dr_client.run_research(system_prompt=messages[0]["content"], dr_task=messages[1]["content"])
             content = response.get("content")
@@ -124,6 +134,7 @@ def attempt_all_concurrent(topics):
 
 def main(args):
     globals()["args"] = args
+    validate_generation_credentials(args)
     if args.num_workers < 1:
         raise ValueError("num_workers must be at least 1")
     if args.max_samples is not None and args.max_samples < 1:
@@ -156,7 +167,8 @@ def main(args):
             raise ValueError("Report cache must be a JSON object")
         for value in predictions.values():
             if (isinstance(value, dict) and value.get("model") is not None
-                    and resolve_openrouter_model(value["model"]) != resolve_openrouter_model(args.model)):
+                    and (resolve_openrouter_model(value["model"]) if model_backend(args) == "builtin" else value["model"])
+                    != generation_model_name(args)):
                 raise ValueError("Report output filename is already used by a different model; select a separate output_dir")
         predictions = {key: value for key, value in predictions.items()
                        if key in request_fingerprints and valid_report(value, args.model)
@@ -216,6 +228,7 @@ if __name__ == "__main__":
     sources.add_argument("--local_dataset", type=str, default=None, help="Local JSON dataset file path")
     add_hf_dataset_arguments(parser)
     parser.add_argument("--model", type=str, required=True, help="Model Endpoint Name")
+    add_generation_arguments(parser)
     parser.add_argument("--max_completion_tokens", type=int, default=None,
                         help="Optional. Limit completion tokens. It can be used to avoid model collapse.")
     parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for sampling.")

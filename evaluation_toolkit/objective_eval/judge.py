@@ -19,7 +19,7 @@ from tqdm import tqdm
 from evaluation_toolkit import safe_json_loads
 from evaluation_toolkit.model_clients import OPENROUTER, resolve_openrouter_model, require_complete_chat
 from evaluation_toolkit.objective_eval.metrics import (
-    calib_err, dump_metrics as write_metrics, valid_judge_result,
+    calib_err, dump_metrics as write_metrics, valid_judge_result, prediction_model_name,
     judge_fingerprint as compute_judge_fingerprint,
 )
 from evaluation_toolkit.objective_eval.predict import load_questions, positive_int, write_json_atomic
@@ -98,8 +98,9 @@ def judge_all_responses(questions, predictions, on_result=None):
     return results
 
 
-def dump_metrics(predictions, n):
-    model_name = Path(args.predictions).stem
+def dump_metrics(predictions, n, *, model_name=None):
+    if model_name is None:
+        model_name = prediction_model_name(predictions, Path(args.predictions).stem)
     output = getattr(args, "metrics_csv", None) or _project_root / "eval_result/objective_eval/evaluation_results.csv"
     return write_metrics(model_name, args.judge, predictions, n, output)
 
@@ -119,10 +120,7 @@ def _run(args):
         predictions = json.load(handle)
     if not isinstance(predictions, dict):
         raise ValueError("Predictions must be a JSON object")
-    prediction_models = {resolve_openrouter_model(entry["model"]) for entry in predictions.values()
-                         if isinstance(entry, dict) and isinstance(entry.get("model"), str)}
-    if len(prediction_models) > 1:
-        raise ValueError("Predictions contain multiple models; provide one model per prediction file")
+    model_name = prediction_model_name(predictions, Path(args.predictions).stem)
     if output_path.exists():
         with output_path.open(encoding="utf-8-sig") as handle:
             cache = json.load(handle)
@@ -159,7 +157,7 @@ def _run(args):
     except BaseException:
         write_json_atomic(output_path, judged)
         raise
-    summary = dump_metrics(judged, len(questions))
+    summary = dump_metrics(judged, len(questions), model_name=model_name)
     if missing:
         print(f"Judging incomplete: {missing} question(s) have no valid prediction. Generate the missing predictions and rerun.")
     return int(summary["Evaluated"] != summary["Total"])

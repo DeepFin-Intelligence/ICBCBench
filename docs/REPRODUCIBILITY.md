@@ -9,7 +9,7 @@ hashes and URL attachment provenance are in `data/huggingface_version.json`.
 The URL-reference revision is available on GitHub branch `Zhiwei`; it has not
 been published to the remote Hugging Face dataset.
 
-Use Python 3.12 and `requirements-lock.txt`. The unified `run` command records
+Use Python 3.12 and `requirements-lock.txt`. The unified `run` and `score` commands record
 Python/dependency versions, model and judge IDs, source dataset hashes, selected
 original task IDs, the code/prompt/configuration hash and reference date in
 `run_manifest.json`. It saves exact subset JSONs under `inputs/`. Preserve the
@@ -23,6 +23,40 @@ pipeline provides rerunnable evaluation and auditable aggregation; reproducing
 historical Table 1 numbers additionally requires the historical generated
 reports, judgments, source snapshots and original evaluation conventions. The
 repository does not fabricate these missing artifacts.
+
+## Imported results and custom systems
+
+`score` evaluates existing objective answers and/or subjective reports without
+regenerating them. Its judges, three expert-rubric rounds, citation/source checks,
+task 36 correction and aggregation are the same as `run`. Scoring still requires
+judge credentials and network access; only `--dry_run` is an offline import
+validation and plan preview. Formats and commands are in
+[CUSTOM_MODELS.md](CUSTOM_MODELS.md).
+
+Imports use original task IDs within each track. By default, the file must cover
+every selected task exactly once; the default selection is all public tasks in
+the supplied tracks. `--language` and `--limit` select a smaller fixed set.
+`--allow_subset` explicitly evaluates a nonempty partial set from those selected
+tasks, with that set frozen for every downstream stage. Unknown or extra IDs are
+rejected even in subset mode. Report the selected IDs with subset scores and
+compare only identical task sets. The import manifest records source-file
+provenance; changing source responses or run settings requires a new run folder.
+
+`run --model_backend openai` sends generation requests to an explicitly supplied
+Chat Completions endpoint, with its own optional local-service credential. It does
+not change the judge endpoint or credentials. `run --model_backend agent` calls
+a developer-provided Python adapter with task ID, track, language, model label and
+formatted messages; reference answers and rubrics are excluded from this input.
+The adapter owns its research tools, provider configuration and retry policy.
+Record the tested service's actual model version and the adapter's code/dependency
+revision alongside the runner manifest. A model label alone does not pin a remote
+deployment or describe an agent's retrieval setting.
+
+Custom generation supports an explicit attachment mode: `url` passes source URLs
+and page locators as text without fetching them, while `image` renders the
+referenced PDF pages for an image-capable interface. Record this setting and
+keep it consistent across compared systems. The example agent and imported
+fixture files are synthetic integration examples, not benchmark measurements.
 
 ## Public subjective task 36: explicit correction
 
@@ -53,8 +87,9 @@ Table 1 was scored. Historical results are not overwritten or silently rescaled.
 
 ## Three expert rounds and source reference date
 
-The default runner saves three separate expert scoring rounds, all judging the
-same generated reports. Their model-level averages are averaged before applying
+The default runner saves three separate model-judge rounds using expert rubrics,
+all judging the same generated or imported reports. These are not human scoring
+sessions. Their model-level averages are averaged before applying
 `S_final = 0.8 * S_expert + 0.1 * S_citation + 0.1 * S_source`. A repeated command
 resumes completed tasks; it does not create an additional scoring round. Missing
 requested round files and duplicate round-file inputs are rejected. Intermediate
@@ -85,6 +120,9 @@ redistributing third-party contents requires the corresponding rights.
 
 Ordinary OpenRouter chat models receive the task prompt and supported attachments;
 the toolkit does not attach a search tool to these baseline chat requests.
+The same applies to custom chat endpoints. A custom agent supplies its own search
+or retrieval workflow; result import does not establish how responses were
+generated, so the developer must describe that setting separately.
 Deep Research clients use their provider's research API or configured agent
 workflow. Report/judgment metadata preserves citation annotations where supported.
 The objective task 25 PDFs are fetched and selected pages rendered as attachment

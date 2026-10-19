@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1,
+    "model": "synthetic-example",
+    "response": "# Synthetic example report\n\nThis is a format example, not a historical report or an output from an evaluated model. No research was performed. It contains no evidence or citations and must not be used to claim model performance."
+  },
+  {
+    "id": 21,
+    "model": "synthetic-example",
+    "response": "# 合成示例报告\n\n这是文件格式示例，不是历史报告或被测模型的输出。没有实际开展研究，也不包含证据或引用，不能用来报告模型性能。"
+  }
+]

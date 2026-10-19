@@ -100,7 +100,9 @@ runs alternate English and Chinese tasks, preserving original IDs. Every stage
 uses the same saved subset, so coverage and averages have the correct denominator.
 
 The runner executes prediction/judging/metrics and report generation, **three
-independent expert scoring passes**, FACT and final aggregation. Inspect:
+separate model-judge passes using expert rubrics**, FACT and final aggregation.
+All three passes score the same reports; these are not human scoring sessions.
+Inspect:
 
 - `RUN_DIR/objective/metrics/evaluation_results.csv` and language-specific CSVs;
 - `RUN_DIR/subjective/expert_round_*/judge_gemini-3.1-pro/scores_gpt-4o.jsonl` for per-task raw and normalized expert scores;
@@ -117,6 +119,50 @@ defaults are `gpt-5.4`, `gemini-3.1-pro`, and `google/gemini-3-flash-preview`.
 A fresh run reproduces this release's evaluation procedure, not necessarily the
 historical Table 1 numbers. See [reproduction conventions](docs/REPRODUCIBILITY.md).
 
+## Evaluate Your Own System
+
+Start with **results import** if your model or agent already produces answers and
+reports. The `score` command skips generation and runs the same objective judges,
+three expert-rubric scoring rounds, citation/source checks and aggregation:
+
+```bash
+python -m evaluation_toolkit score \
+    --model synthetic-example \
+    --objective_results examples/results/objective.json \
+    --subjective_results examples/results/subjective.json \
+    --limit 2 --as_of 2026-10-19 \
+    --run_dir eval_result/import-example --dry_run
+```
+
+These files are **synthetic format examples**, not actual model outputs or
+historical Table 1 data. `--dry_run` validates the import and prints the plan
+without API calls. Replace them with your system's results and remove
+`--dry_run` to score using `OPENROUTER_API_KEY`; live scoring uses provider calls
+and may retrieve cited sources. Omit `--limit` for the full selected tracks.
+
+Input files may be keyed JSON, JSON arrays, or JSONL records with original task
+IDs and a nonempty `response`. The track is inferred from the supplied paths.
+By default, all selected tasks must be present; `--allow_subset` explicitly
+permits arbitrary partial task sets. Compare scores only on identical task sets.
+
+For a model served through an OpenAI-compatible Chat Completions endpoint:
+
+```bash
+python -m evaluation_toolkit run \
+    --model_backend openai --model my-model \
+    --model_base_url http://127.0.0.1:8000/v1 \
+    --attachment_mode url --track both --limit 2 \
+    --as_of 2026-10-19 --run_dir eval_result/my-model --dry_run
+```
+
+For a Python research agent, use `--model_backend agent` with
+`--agent examples.custom_agent:generate` (the bundled adapter returns synthetic
+placeholders; replace it with your own research workflow). Model/agent generation
+is configured separately from the scoring judges. See the
+[custom model and agent guide](docs/CUSTOM_MODELS.md) for result schemas, partial
+imports, endpoint authentication, attachments, the callable contract, and resume
+behavior.
+
 ## Environment Variables
 
 API keys are loaded from a `.env` file in the project root. Copy `.env.example` to `.env` and fill in the required keys:
@@ -127,13 +173,17 @@ cp .env.example .env
 
 Current clients use `OPENROUTER_API_KEY` as the default. Refer to `model_clients.py` and `.env.example` for all supported keys.
 
-Only the selected provider needs a key: ordinary models, Tongyi, and FACT use
+The generation provider and selected judges each need their own configured keys:
+ordinary OpenRouter models, Tongyi, and all scoring judges use
 `OPENROUTER_API_KEY`; Gemini DR uses `GEMINI_API_KEY`; OpenAI DR uses
 `OPENAI_API_KEY`; Tavily uses `TAVILY_API_KEY`; Qwen DR uses `DASHSCOPE_API_KEY`.
 Configuration is read from this project's `.env`, and `--help` does not require keys.
 Short names such as `gpt-4o`, `gpt-5.4`, and `gemini-3.1-pro` are supported,
 as are full OpenRouter IDs such as `openai/gpt-4o`. Output filenames use the
 last component of a full model ID (for example, `gpt-4o.json`).
+Custom endpoints use the separate environment variable selected by
+`--model_api_key_env`; unauthenticated loopback endpoints may omit it. Imported
+results need no generation key. See [custom systems](docs/CUSTOM_MODELS.md).
 
 ## License and Redistribution
 

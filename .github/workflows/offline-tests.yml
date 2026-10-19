@@ -26,3 +26,6 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: python -m evaluation_toolkit demo --output_dir eval_result/ci-demo
       - run: python -m evaluation_toolkit run --model gpt-4o --track both --limit 2 --as_of 2026-10-16 --run_dir eval_result/ci-smoke --dry_run
+      - run: python -m evaluation_toolkit score --model synthetic-example --objective_results examples/results/objective.json --subjective_results examples/results/subjective.json --limit 2 --as_of 2026-10-19 --run_dir eval_result/ci-import --dry_run
+      - run: python -m evaluation_toolkit run --model_backend openai --model local-model --model_base_url http://127.0.0.1:8000/v1 --attachment_mode url --limit 2 --as_of 2026-10-19 --run_dir eval_result/ci-custom-chat --dry_run
+      - run: python -m evaluation_toolkit run --model_backend agent --agent examples.custom_agent:generate --model synthetic-agent --attachment_mode url --limit 2 --as_of 2026-10-19 --run_dir eval_result/ci-agent --dry_run

@@ -33,6 +33,10 @@ from evaluation_toolkit.model_clients import *
 from evaluation_toolkit.DR_clients import create_dr_client
 from evaluation_toolkit.objective_eval.metrics import validate_questions
 from evaluation_toolkit.dataset_loading import add_hf_dataset_arguments, load_hf_dataset
+from evaluation_toolkit.generation import (
+    add_generation_arguments, generation_config, validate_generation_credentials,
+    generate_custom, generation_model_name, model_backend,
+)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -331,7 +335,7 @@ def format_message(question, for_dr_model=False):
     if attachment_list:
         content_blocks, text_annotations = build_attachment_content(
             attachment_list, selected_dataset_path(args),
-            materialize_images=not for_dr_model,
+            materialize_images=not for_dr_model and getattr(args, "attachment_mode", "image") == "image",
         )
 
         if for_dr_model:
@@ -352,13 +356,13 @@ def format_message(question, for_dr_model=False):
                 content.extend(content_blocks)
             else:
                 content = user_text
-            system_role = "user" if "o1" in args.model else "system"
+            system_role = "user" if model_backend(args) == "builtin" and "o1" in args.model else "system"
             messages = [
                 {"role": system_role, "content": SYSTEM_PROMPT},
                 {"role": "user", "content": content}
             ]
     else:
-        system_role = "user" if "o1" in args.model else "system"
+        system_role = "user" if model_backend(args) == "builtin" and "o1" in args.model else "system"
         messages = [
             {"role": system_role, "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_text}
@@ -374,8 +378,13 @@ def attempt_question(question):
         for attachment in question.get("attachment") or []
     )
     messages = format_message(
-        question, for_dr_model=args.model in TEXT_ONLY_DR_MODELS and source_references,
+        question, for_dr_model=model_backend(args) == "builtin" and args.model in TEXT_ONLY_DR_MODELS and source_references,
     )
+    if model_backend(args) != "builtin":
+        response = generate_custom(args, task_id=question["id"], track="objective",
+                                   language=question["language"], messages=messages)
+        metadata = {"provider_citations": response["citations"]}
+        return question["id"], response["content"], response["usage"], fingerprint, metadata
     dr_client = create_dr_client(args.model)
     if dr_client is not None:
         dr_client.cancel_event = getattr(args, "research_cancel_event", None)
@@ -416,10 +425,10 @@ def request_fingerprint(question, options):
         path = Path(resolve_attachment_path(attachment.get("file_path", ""), selected_dataset_path(options)))
         attachment_hashes.append(hashlib.sha256(path.read_bytes()).hexdigest())
     payload = {"question": question, "attachments": attachment_hashes,
-               "model": resolve_openrouter_model(options.model),
+               "model": generation_model_name(options), "generation": generation_config(options),
                "temperature": options.temperature,
                "max_completion_tokens": options.max_completion_tokens,
-               "answer_prompts": prompt_templates["answer"], "schema_version": 3}
+               "answer_prompts": prompt_templates["answer"], "schema_version": 4}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
@@ -493,6 +502,7 @@ def attempt_all(questions, on_result=None):
     return results
 
 def _run(args):
+    validate_generation_credentials(args)
     if args.num_workers < 1:
         raise ValueError("num_workers must be 1 or greater")
     if args.max_samples is not None and args.max_samples < 1:
@@ -521,7 +531,8 @@ def _run(args):
             raise ValueError("Prediction cache must be a JSON object")
         for previous in predictions.values():
             if (isinstance(previous, dict) and previous.get("model") is not None
-                    and resolve_openrouter_model(previous["model"]) != resolve_openrouter_model(args.model)):
+                    and (resolve_openrouter_model(previous["model"]) if model_backend(args) == "builtin" else previous["model"])
+                    != generation_model_name(args)):
                 raise ValueError("Prediction output filename is already used by a different model; select a separate output_dir")
         reusable_predictions = {}
         for task_id, previous in predictions.items():
@@ -545,12 +556,14 @@ def _run(args):
         predictions = {}
 
     def save_result(result):
-        unique_id, response, usage, fingerprint = result
+        unique_id, response, usage, fingerprint = result[:4]
+        metadata = result[4] if len(result) > 4 else {}
         predictions[unique_id] = {
             "model": args.model,
             "response": response,
             "usage": usage,
             "request_fingerprint": fingerprint,
+            **metadata,
         }
         write_json_atomic(output_filepath, predictions)
 
@@ -586,6 +599,7 @@ if __name__ == "__main__":
     sources.add_argument("--local_dataset", type=str, default=None, help="Local JSON dataset file path")
     add_hf_dataset_arguments(parser)
     parser.add_argument("--model", type=str, required=True, help="Model Endpoint Name")
+    add_generation_arguments(parser)
     parser.add_argument("--max_completion_tokens", type=positive_int, default=None,
                         help="Optional. Limit completion tokens. It can be used to avoid model collapse.")
     parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for sampling.")

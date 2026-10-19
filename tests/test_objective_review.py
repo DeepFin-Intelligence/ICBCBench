@@ -128,7 +128,7 @@ class ObjectiveReviewTests(unittest.TestCase):
             self.assertEqual(int(row['Total']), expected)
             self.assertEqual(int(row['Evaluated']), expected)
             self.assertEqual(float(row['Accuracy (%)']), 100)
-            self.assertEqual(row['Model'], 'model_with_underscores')
+            self.assertEqual(row['Model'], 'gpt-4o')
         self.assertEqual(sum(q['modality'] == 'Text-Only' for q in PUBLIC), 70)
 
     def test_partial_metrics_use_full_selected_dataset_denominator(self):
