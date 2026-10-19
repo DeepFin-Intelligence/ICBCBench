@@ -16,6 +16,7 @@ import math
 from evaluation_toolkit.utils import get_project_root
 from evaluation_toolkit.model_clients import resolve_openrouter_model
 from evaluation_toolkit.subjective_eval.scoring.provenance import valid_fingerprint
+from evaluation_toolkit.subjective_eval.FACT.time_decay import reference_time
 
 
 def normalize_model_name(name):
@@ -83,7 +84,11 @@ def compute_final_score(expert_csvs, fact_csv, output_csv, alpha, beta, gamma):
         raise ValueError(f"FACT scores are missing for models: {sorted(missing_models)}")
     check_matching_inputs(df_expert, df_fact, fact_csv)
 
-    time_columns = ['Evaluation As Of (UTC)'] if 'Evaluation As Of (UTC)' in df_fact else []
+    # FACT files may include other models; dates must match among the models
+    # actually being ranked together, after normalization to a UTC instant.
+    df_fact = df_fact[df_fact['_norm_model'].isin(df_expert['_norm_model'])].copy()
+    validate_reference_dates(df_fact, fact_csv)
+    time_columns = ['Evaluation As Of (UTC)']
     # 4. Merge validated inputs by normalized model name
     df_merged = pd.merge(
         df_expert[['Model', 'Avg Score', '_norm_model', 'Total Tasks',
@@ -163,6 +168,24 @@ def validate_provenance(frame, source):
             raise ValueError(f'Invalid {column} in {source}')
     if frame['Task Set Fingerprint'].nunique() != 1:
         raise ValueError(f'Score input mixes different task sets: {source}')
+
+
+def validate_reference_dates(frame, source):
+    column = 'Evaluation As Of (UTC)'
+    repair = 'Rerun FACT statistics with --as_of using the same reference date for all compared models.'
+    if column not in frame.columns:
+        raise ValueError(f'FACT input lacks {column}: {source}. {repair}')
+    dates = []
+    for value in frame[column]:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'FACT input has a missing or invalid {column}: {source}. {repair}')
+        try:
+            dates.append(reference_time(value.strip()).isoformat())
+        except (ValueError, OverflowError) as exc:
+            raise ValueError(f'FACT input has an invalid {column}: {source}. {repair}') from exc
+    if len(set(dates)) != 1:
+        raise ValueError(f'FACT input mixes different evaluation reference dates: {source}. {repair}')
+    frame[column] = dates
 
 
 def check_matching_inputs(base, other, source, require_same_models=False):

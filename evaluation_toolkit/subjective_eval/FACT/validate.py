@@ -147,8 +147,7 @@ def validate(data, id_to_lang_map, judge_model="google/gemini-3-flash-preview"):
                 model=resolve_openrouter_model(judge_model),
                 messages=[{"role": "user", "content": user_prompt}],
             )
-            if getattr(response.choices[0], 'finish_reason', None) in ('length', 'content_filter'):
-                raise ValueError('Validation response did not finish normally')
+            require_complete_chat(response)
 
             response = response.choices[0].message.content
 

@@ -14,7 +14,8 @@ Python/dependency versions, model and judge IDs, source dataset hashes, selected
 original task IDs, the code/prompt/configuration hash and reference date in
 `run_manifest.json`. It saves exact subset JSONs under `inputs/`. Preserve the
 manifest, intermediate JSON/JSONL records and CSVs with an experiment. API keys
-are never included in the manifest.
+are never included in the manifest. Task files, manifests and stage logs use
+explicit UTF-8 encoding, including when the host default encoding differs.
 
 Provider model aliases and online sources can change. Even with the same prompts,
 model IDs and temperature, live outputs and judge scores may vary. The public
@@ -56,19 +57,26 @@ The default runner saves three separate expert scoring rounds, all judging the
 same generated reports. Their model-level averages are averaged before applying
 `S_final = 0.8 * S_expert + 0.1 * S_citation + 0.1 * S_source`. A repeated command
 resumes completed tasks; it does not create an additional scoring round. Missing
-requested round files and duplicate round-file inputs are rejected.
+requested round files and duplicate round-file inputs are rejected. Intermediate
+expert CSVs preserve numeric precision for individual scores and their means;
+only the final leaderboard rounds displayed scores to two decimals. This avoids
+changing the last displayed digit through repeated rounding.
 
 `--as_of YYYY-MM-DD` is required for subjective runs through the unified runner.
 It denotes midnight UTC; ISO timestamps with offsets are also accepted. The
 FACT statistics CLI supports the same option. When that individual CLI is used
 without the option, it captures the current UTC time once and records it.
 FACT and final CSVs include `Evaluation As Of (UTC)`; final CSVs also include
-`Expert Rounds`. Reuse the same reference date for comparisons.
+`Expert Rounds`. Final aggregation requires this date field and rejects missing,
+invalid or different reference dates among the models being compared; equivalent
+timezone offsets normalize to the same UTC instant. For older FACT CSVs without
+this metadata, rerun FACT statistics with an explicit `--as_of` date. Reuse the
+same reference date for comparisons.
 
 Source timeliness remains `exp(-0.002 * age_in_whole_days)`, rounded to four
 decimals before aggregation. Datetimes are converted to UTC. Missing components
-in a parseable partial publication date default to January/day 1; unparsable or
-missing publication dates contribute zero timeliness/source quality. Future
+in a parseable partial publication date default to year 1970, January and day 1.
+Unparsable or missing publication dates contribute zero timeliness/source quality. Future
 publication dates have age zero. Changing the reference date does not refetch
 or rejudge sources. Save scraped contents and publication dates for later audits;
 redistributing third-party contents requires the corresponding rights.
@@ -84,12 +92,17 @@ inputs for supported image interfaces. Text-only research interfaces receive
 source URLs/page locators. This is different from the historical screenshot input.
 
 The OpenRouter client permits one SDK retry for transient API failures. Citation
-extraction and semantic deduplication additionally allow up to three application
-attempts. These are bounded attempts, not retries until every task succeeds.
+extraction, semantic deduplication and citation validation additionally allow up
+to three application attempts. These are bounded attempts, not retries until
+every task succeeds.
 Provider-specific research clients have their own polling timeout/cancellation
 handling. Failed, empty, truncated or invalid outputs do not become successful
 cached responses; the stage returns a nonzero status and retains completed work.
 The runner stops at that stage. Rerun the same command to retry remaining work.
+Deduplication may reuse unchanged fact selections, but always retains the current
+report, model and question provenance. A changed input language invalidates that
+decision cache; legacy caches without language metadata regenerate once. Source
+retrieval and validation each apply their own cache checks.
 
 Objective accuracy uses the full selected task set as denominator, so missing
 judgments lower partial accuracy and coverage. Expert statistics exclude missing

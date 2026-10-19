@@ -30,7 +30,7 @@ def run_demo(base):
         'description': 'Fabricated reports, judgments and citation contents; offline scoring/aggregation only.',
         'expected': {'objective_accuracy': 50, 'S_expert': 80, 'S_citation': 50,
                      'S_source': 50, 'S_final': 74}})
-    objective = json.loads((ROOT / 'data/objective_questions_public_80.json').read_text())
+    objective = json.loads((ROOT / 'data/objective_questions_public_80.json').read_text(encoding='utf-8'))
     objective = [next(q for q in objective if q['language'] == lang) for lang in ('en', 'zh')]
     atomic_save(base / 'objective/questions.json', objective)
     judgments = {}
@@ -42,7 +42,7 @@ def run_demo(base):
     atomic_save(base / 'objective/judged/judged_synthetic-offline-demo.json', judgments)
     status = metrics.main(SimpleNamespace(query_file=base / 'objective/questions.json', judge=MODEL,
                           judged_dir=base / 'objective/judged', output_dir=base / 'objective'))
-    questions = json.loads((ROOT / 'data/subjective_questions_public_40.json').read_text())
+    questions = json.loads((ROOT / 'data/subjective_questions_public_40.json').read_text(encoding='utf-8'))
     # Include the unchanged public rubric 36 so the normalization is inspectable.
     questions = [questions[0], next(q for q in questions if q['id'] == '36')]
     query = base / 'subjective/questions.json'

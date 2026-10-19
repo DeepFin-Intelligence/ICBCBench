@@ -23,13 +23,13 @@ def check_release():
     from evaluation_toolkit.subjective_eval.runtime import validate_questions
     from evaluation_toolkit.subjective_eval.ExpertCriteria.score_by_criteria import (
         parse_criteria_dimensions, scoring_adjustments)
-    manifest = json.loads((ROOT / 'data/huggingface_version.json').read_text())
+    manifest = json.loads((ROOT / 'data/huggingface_version.json').read_text(encoding='utf-8'))
     for entry in manifest['files']:
         path = ROOT / entry['path']
         if path.stat().st_size != entry['size'] or sha256(path) != entry['sha256']:
             raise ValueError(f'Release file differs from manifest: {entry["path"]}')
     for track, filename in DATASETS.items():
-        questions = validate_questions(json.loads((ROOT / 'data' / filename).read_text()))
+        questions = validate_questions(json.loads((ROOT / 'data' / filename).read_text(encoding='utf-8')))
         expected = 80 if track == 'objective' else 40
         if len(questions) != expected or any(sum(q['language'] == lang for q in questions) != expected // 2 for lang in ('en', 'zh')):
             raise ValueError(f'Unexpected public {track} task counts')
@@ -45,7 +45,7 @@ def check_release():
 
 def dependency_versions():
     versions = {}
-    for line in (ROOT / 'requirements-lock.txt').read_text().splitlines():
+    for line in (ROOT / 'requirements-lock.txt').read_text(encoding='utf-8').splitlines():
         if not line or line.startswith('#'):
             continue
         name, expected = line.split('==')
@@ -82,7 +82,7 @@ def check_keys(model):
 
 
 def select_questions(track, language=None, limit=None):
-    questions = json.loads((ROOT / 'data' / DATASETS[track]).read_text())
+    questions = json.loads((ROOT / 'data' / DATASETS[track]).read_text(encoding='utf-8'))
     if language:
         questions = [q for q in questions if q['language'] == language]
     if limit:
@@ -179,7 +179,7 @@ def run_pipeline(options):
     base = Path(options.run_dir).resolve()
     manifest_path = base / 'run_manifest.json'
     if manifest_path.exists():
-        old = json.loads(manifest_path.read_text())
+        old = json.loads(manifest_path.read_text(encoding='utf-8'))
         if old['config'] != config or old['dependencies'] != versions or old['python'] != platform.python_version():
             raise ValueError('Run configuration/code/environment changed; choose a new --run_dir')
     elif base.exists() and any(base.iterdir()):
@@ -188,13 +188,15 @@ def run_pipeline(options):
     from evaluation_toolkit.subjective_eval.runtime import atomic_save
     for track, questions in datasets.items():
         path = base / 'inputs' / f'{track}.json'
-        if path.exists() and json.loads(path.read_text()) != questions:
+        if path.exists() and json.loads(path.read_text(encoding='utf-8')) != questions:
             raise ValueError(f'Frozen task subset was modified: {path}')
         atomic_save(str(path), questions)
     manifest = {'config': config, 'dependencies': versions, 'python': platform.python_version(),
                 'platform': platform.platform(), 'steps': steps, 'status': 'running', 'completed_steps': []}
     atomic_save(str(manifest_path), manifest)
     (base / 'logs').mkdir(exist_ok=True)
+    # Child stdout/stderr are redirected to UTF-8 logs, independent of the host locale.
+    child_env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
     try:
         for index, step in enumerate(steps, 1):
             manifest['current_step'] = step['name']
@@ -202,7 +204,7 @@ def run_pipeline(options):
             print(f'[{index}/{len(steps)}] {step["name"]}', flush=True)
             log_path = base / 'logs' / f'{step["name"]}.log'
             with log_path.open('a', encoding='utf-8') as log:
-                result = subprocess.run(step['command'], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+                result = subprocess.run(step['command'], cwd=ROOT, env=child_env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode:
                 manifest.update(status='failed', returncode=result.returncode)
                 print(f'Stage failed; see {log_path}. Rerun the same command to resume.', file=sys.stderr)

@@ -55,6 +55,7 @@ def deduplicate_report(d, id_to_lang_map, judge_model="google/gemini-3-flash-pre
         language = id_to_lang_map[d['id']]
         if language not in ('zh', 'en'):
             raise ValueError(f'Unsupported language: {language}')
+        d['dedup_language'] = language
     except Exception as exc:
         d['citations_deduped'] = {}
         d['dedup_error'] = str(exc)
@@ -74,8 +75,7 @@ def deduplicate_report(d, id_to_lang_map, judge_model="google/gemini-3-flash-pre
                         model=resolve_openrouter_model(judge_model),
                         messages=[{'role': 'user', 'content': template.format(statements=statements)}],
                         max_tokens=65536)
-                    if getattr(response.choices[0], 'finish_reason', None) in ('length', 'content_filter'):
-                        raise ValueError('Deduplication response did not finish normally')
+                    require_complete_chat(response)
                     text = response.choices[0].message.content
                     candidate = json.loads(text.replace('```json', '').replace('```', ''))
                     if (not isinstance(candidate, list) or not candidate
@@ -92,6 +92,25 @@ def deduplicate_report(d, id_to_lang_map, judge_model="google/gemini-3-flash-pre
         deduped[url] = {'facts': [group[index - 1]['fact'] for index in indices], 'url_content': None}
     d['citations_deduped'] = deduped
     return d, int(bool(d.get('dedup_error')))
+
+
+def reuse_deduplication(current, cached, language, judge_model):
+    """Reuse semantic decisions without restoring a previous report's metadata."""
+    if (language not in ('en', 'zh') or cached.get('dedup_language') != language
+            or cached.get('dedup_model') != resolve_openrouter_model(judge_model)
+            or cached.get('citations') != current.get('citations')
+            or not valid_deduplication_cache(current, cached)):
+        return None
+    result = dict(current, dedup_model=resolve_openrouter_model(judge_model),
+                  dedup_language=language)
+    result.pop('dedup_error', None)
+    # Source retrieval and validation have their own input-aware caches. This
+    # stage owns only the chosen fact lists; carry no old source or judgments.
+    result['citations_deduped'] = {
+        url: {'facts': list(citation['facts']), 'url_content': None}
+        for url, citation in cached['citations_deduped'].items()
+    }
+    return result
 
 
 def run(data, output_path, id_to_lang_map, judge_model="google/gemini-3-flash-preview"):
@@ -128,11 +147,13 @@ if __name__ == '__main__':
         raw_data[identifier] = {'id': identifier, 'citations': 'extraction failed',
                                 'extraction_error': 'Missing report in input'}
     existing = records_by_id(load_jsonl(args.output_path)) if os.path.exists(args.output_path) else {}
-    successful = {identifier: existing[identifier] for identifier, item in raw_data.items()
-                  if identifier in existing and not existing[identifier].get('dedup_error')
-                  and existing[identifier].get('dedup_model') == resolve_openrouter_model(args.judge)
-                  and existing[identifier].get('citations') == item.get('citations')
-                  and valid_deduplication_cache(item, existing[identifier])}
+    successful = {}
+    for identifier, item in raw_data.items():
+        previous = existing.get(identifier)
+        if previous is not None:
+            reused = reuse_deduplication(item, previous, id_to_lang_map.get(identifier), args.judge)
+            if reused is not None:
+                successful[identifier] = reused
     write_jsonl(args.output_path, successful.values())
     pending = [item for identifier, item in raw_data.items() if identifier not in successful]
     print(f'Processing {len(pending)} reports...')

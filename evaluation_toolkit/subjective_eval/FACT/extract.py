@@ -137,8 +137,7 @@ def extract_report(d, id_to_lang_map, judge_model="google/gemini-3-flash-preview
                 response = client.chat.completions.create(
                     model=resolve_openrouter_model(judge_model),
                     messages=[{"role": "user", "content": user_prompt}], max_tokens=65536)
-                if getattr(response.choices[0], 'finish_reason', None) in ('length', 'content_filter'):
-                    raise ValueError('Extraction response did not finish normally')
+                require_complete_chat(response)
                 text = response.choices[0].message.content
                 if not isinstance(text, str) or not text.strip():
                     raise ValueError('Empty extraction response')

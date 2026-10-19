@@ -114,15 +114,16 @@ def merge_multiple_jsonl_to_csv(file_list, output_csv_path, language_filter, id_
 
         for tid in sorted_task_ids:
             s = scores.get(tid, 0)  # Default to 0 if missing
-            row[tid] = round(s, 2)
+            # Intermediate CSVs feed multi-round aggregation: keep full precision,
+            # including fractions introduced by the registered rubric correction.
+            row[tid] = s
             score_sum += s
             if tid in scores:
                 count += 1
 
         # Calculate average score
         avg_score = score_sum / count if count > 0 else 0
-        # row['Avg Score'] = round(avg_score * 10, 2)  # Keep two decimal places
-        row['Avg Score'] = round(avg_score, 2)
+        row['Avg Score'] = avg_score
         if expected_ids is not None:
             row['Evaluated Tasks'] = len(set(scores) & set(expected_ids))
             row['Total Tasks'] = len(expected_ids)

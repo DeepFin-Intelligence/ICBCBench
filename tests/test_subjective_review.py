@@ -289,7 +289,8 @@ class SubjectiveReviewTests(unittest.TestCase):
                     "Report Set Fingerprint": [report_set_fingerprint({"1": report_fingerprint("1", report)})],
                     "Provenance Verified": [True]}
         pd.DataFrame({"Model": ["gpt-4o"], "Avg Score": [80], **metadata}).to_csv(expert_csv, index=False)
-        pd.DataFrame({"Model Name": ["gpt-4o"], "Avg Citation Score (Macro)": [60], "Avg Source Quality Score (S_source)": [40], **metadata}).to_csv(fact_csv, index=False)
+        pd.DataFrame({"Model Name": ["gpt-4o"], "Avg Citation Score (Macro)": [60], "Avg Source Quality Score (S_source)": [40],
+                      "Evaluation As Of (UTC)": ["2026-10-16T00:00:00+00:00"], **metadata}).to_csv(fact_csv, index=False)
         return expert_csv, fact_csv
 
     def test_final_score_multiround_and_scale(self):

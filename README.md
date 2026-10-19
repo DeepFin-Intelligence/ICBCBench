@@ -370,8 +370,10 @@ S_final = alpha * S_expert + beta * S_citation + gamma * S_source
   cannot combine different providers with the same model basename. Standalone
   objective metrics verify each judgment against its question and judge.
 - Expert and FACT CSVs carry task-set and original-report fingerprints. Final
-  aggregation requires complete coverage and matching provenance across all
-  expert rounds and FACT. Regenerate older score files without these fields.
+  aggregation requires complete coverage, matching provenance across all
+  expert rounds and FACT, and a common `Evaluation As Of (UTC)` date. Regenerate
+  older FACT CSVs with `--as_of` when this field is missing. Intermediate expert
+  CSVs preserve full numeric precision; final score columns display two decimals.
   Duplicate task records fail explicitly rather than overwriting one another.
 - Truncated or filtered model responses are failed tasks even when their text
   or JSON is nonempty. OpenAI and Gemini clients try to cancel running background
