@@ -207,3 +207,6 @@ __marimo__/
 eval_result/
 
 .DS_Store
+
+# Local-only CI configuration
+.github/

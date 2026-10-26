@@ -162,7 +162,7 @@ provider. `demo` uses fabricated inputs and runs real score validation and
 aggregation, producing 50% objective accuracy and a 74.00 subjective final score.
 It is not an evaluation of any model. The regression suite also exercises the
 real SDK request/response interfaces with offline transports and all public
-tasks. CI runs this workflow on Ubuntu and macOS with Python 3.12.
+tasks. It has been tested on Ubuntu and macOS with Python 3.12.
 
 The README lists unresolved content questions in several objective tasks. The
 release preserves their wording and answers rather than inventing missing
